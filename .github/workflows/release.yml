@@ -19,6 +19,8 @@ jobs:
         with:
           distribution: temurin
           java-version: "21"
+          # Reuses downloaded libraries between releases, so a busy Maven Central (HTTP 429) rarely matters.
+          cache: gradle
 
       - name: Version from the tag
         id: version
