@@ -1,0 +1,262 @@
+package com.kodraliu.localrock.shared.settings
+
+import com.russhwolf.settings.Settings
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlin.random.Random
+
+enum class ThemeMode { SYSTEM, LIGHT, DARK }
+
+private const val KEY_SERVER_BASE_URL = "server_base_url"
+private const val KEY_USER_DATA = "user_data_json"
+private const val KEY_THEME_MODE = "theme_mode"
+private const val KEY_ADMIN_PASSWORD = "admin_password"
+private const val KEY_WIFI_SSID = "onboarding_wifi_ssid"
+private const val KEY_WIFI_PASSWORD = "onboarding_wifi_password"
+private const val KEY_INSTALL_ID = "install_id"
+private const val KEY_INTRO_SEEN = "intro_seen"
+private const val KEY_LAST_SEEN_VERSION = "last_seen_version"
+private const val KEY_DEMO_MODE = "demo_mode"
+private const val KEY_LOGIN_EMAIL = "login_email"
+private const val KEY_LOGIN_CODE = "login_code"
+private const val KEY_NOTIFY_ENABLED = "notify_enabled"
+private const val KEY_NOTIFY_ERRORS = "notify_errors"
+private const val KEY_NOTIFY_FINISHED = "notify_finished"
+private const val KEY_NOTIFY_DOCK = "notify_dock"
+private const val KEY_NOTIFY_BACKGROUND = "notify_background"
+private const val KEY_NOTIFY_PROGRESS = "notify_progress"
+private const val KEY_LAST_OPENED_DUID = "last_opened_duid"
+// A three-quarter view, so a first look at the 3D map shows two faces of every wall.
+private const val DEFAULT_MAP_3D_YAW = 35f
+private const val DEFAULT_MAP_3D_TILT = 53f
+
+class AppSettings(private val settings: Settings) {
+
+
+    val installId: String = settings.getStringOrNull(KEY_INSTALL_ID) ?: run {
+        val id = buildString { repeat(8) { append("0123456789abcdef"[Random.nextInt(16)]) } }
+        settings.putString(KEY_INSTALL_ID, id)
+        id
+    }
+
+    private val _serverBaseUrl =
+        MutableStateFlow(settings.getStringOrNull(KEY_SERVER_BASE_URL))
+    val serverBaseUrl: StateFlow<String?> = _serverBaseUrl.asStateFlow()
+
+    private val _introSeen = MutableStateFlow(settings.getBoolean(KEY_INTRO_SEEN, false))
+    val introSeen: StateFlow<Boolean> = _introSeen.asStateFlow()
+
+    fun setIntroSeen(value: Boolean) {
+        settings.putBoolean(KEY_INTRO_SEEN, value)
+        _introSeen.value = value
+    }
+
+    /** App version whose What's new the user has seen; null for anyone who used 1.1.0 or older. */
+    private val _lastSeenVersion = MutableStateFlow(settings.getStringOrNull(KEY_LAST_SEEN_VERSION))
+    val lastSeenVersion: StateFlow<String?> = _lastSeenVersion.asStateFlow()
+
+    fun setLastSeenVersion(version: String) {
+        settings.putString(KEY_LAST_SEEN_VERSION, version)
+        _lastSeenVersion.value = version
+    }
+
+    /** True while the app is in offline demo mode (no server/MQTT; see DemoData). */
+    private val _demoMode = MutableStateFlow(settings.getBoolean(KEY_DEMO_MODE, false))
+    val demoMode: StateFlow<Boolean> = _demoMode.asStateFlow()
+
+    fun setDemoMode(value: Boolean) {
+        settings.putBoolean(KEY_DEMO_MODE, value)
+        _demoMode.value = value
+    }
+
+    private val _themeMode = MutableStateFlow(
+        settings.getStringOrNull(KEY_THEME_MODE)
+            ?.runCatching { ThemeMode.valueOf(this) }?.getOrNull()
+            ?: ThemeMode.SYSTEM
+    )
+    val themeMode: StateFlow<ThemeMode> = _themeMode.asStateFlow()
+
+    fun setThemeMode(mode: ThemeMode) {
+        settings.putString(KEY_THEME_MODE, mode.name)
+        _themeMode.value = mode
+    }
+
+    fun setServerBaseUrl(url: String?) {
+        if (url.isNullOrBlank()) {
+            settings.remove(KEY_SERVER_BASE_URL)
+            _serverBaseUrl.value = null
+        } else {
+            settings.putString(KEY_SERVER_BASE_URL, url)
+            _serverBaseUrl.value = url
+        }
+    }
+
+    private val _adminPassword = MutableStateFlow(settings.getStringOrNull(KEY_ADMIN_PASSWORD))
+    val adminPassword: StateFlow<String?> = _adminPassword.asStateFlow()
+
+    fun setAdminPassword(password: String?) {
+        if (password.isNullOrBlank()) {
+            settings.remove(KEY_ADMIN_PASSWORD)
+            _adminPassword.value = null
+        } else {
+            settings.putString(KEY_ADMIN_PASSWORD, password)
+            _adminPassword.value = password
+        }
+    }
+
+    /** The home Wi-Fi last used to pair a vacuum, so a retry does not mean typing it again. */
+    private val _wifiSsid = MutableStateFlow(settings.getStringOrNull(KEY_WIFI_SSID))
+    val wifiSsid: StateFlow<String?> = _wifiSsid.asStateFlow()
+    private val _wifiPassword = MutableStateFlow(settings.getStringOrNull(KEY_WIFI_PASSWORD))
+    val wifiPassword: StateFlow<String?> = _wifiPassword.asStateFlow()
+
+    fun setWifiCredentials(ssid: String, password: String) {
+        settings.putString(KEY_WIFI_SSID, ssid)
+        settings.putString(KEY_WIFI_PASSWORD, password)
+        _wifiSsid.value = ssid
+        _wifiPassword.value = password
+    }
+
+    /** The robot most recently opened, so a fresh launch can go straight back to it. */
+    private val _lastOpenedDuid = MutableStateFlow(settings.getStringOrNull(KEY_LAST_OPENED_DUID))
+    val lastOpenedDuid: StateFlow<String?> = _lastOpenedDuid.asStateFlow()
+
+    fun setLastOpenedDuid(duid: String) {
+        settings.putString(KEY_LAST_OPENED_DUID, duid)
+        _lastOpenedDuid.value = duid
+    }
+
+    /** Robot alerts as a whole. Off until asked for: turning them on needs the notification permission. */
+    private val _notifyEnabled = MutableStateFlow(settings.getBoolean(KEY_NOTIFY_ENABLED, false))
+    val notifyEnabled: StateFlow<Boolean> = _notifyEnabled.asStateFlow()
+
+    fun setNotifyEnabled(value: Boolean) {
+        settings.putBoolean(KEY_NOTIFY_ENABLED, value)
+        _notifyEnabled.value = value
+    }
+
+    private val _notifyErrors = MutableStateFlow(settings.getBoolean(KEY_NOTIFY_ERRORS, true))
+    val notifyErrors: StateFlow<Boolean> = _notifyErrors.asStateFlow()
+
+    fun setNotifyErrors(value: Boolean) {
+        settings.putBoolean(KEY_NOTIFY_ERRORS, value)
+        _notifyErrors.value = value
+    }
+
+    private val _notifyFinished = MutableStateFlow(settings.getBoolean(KEY_NOTIFY_FINISHED, true))
+    val notifyFinished: StateFlow<Boolean> = _notifyFinished.asStateFlow()
+
+    fun setNotifyFinished(value: Boolean) {
+        settings.putBoolean(KEY_NOTIFY_FINISHED, value)
+        _notifyFinished.value = value
+    }
+
+    private val _notifyDock = MutableStateFlow(settings.getBoolean(KEY_NOTIFY_DOCK, true))
+    val notifyDock: StateFlow<Boolean> = _notifyDock.asStateFlow()
+
+    fun setNotifyDock(value: Boolean) {
+        settings.putBoolean(KEY_NOTIFY_DOCK, value)
+        _notifyDock.value = value
+    }
+
+    /** Keep watching after the app is closed. Only does anything where the platform allows it. */
+    private val _notifyBackground = MutableStateFlow(settings.getBoolean(KEY_NOTIFY_BACKGROUND, false))
+    val notifyBackground: StateFlow<Boolean> = _notifyBackground.asStateFlow()
+
+    fun setNotifyBackground(value: Boolean) {
+        settings.putBoolean(KEY_NOTIFY_BACKGROUND, value)
+        _notifyBackground.value = value
+    }
+
+    /** A standing notification with the state and progress of a running clean job. */
+    private val _notifyProgress = MutableStateFlow(settings.getBoolean(KEY_NOTIFY_PROGRESS, true))
+    val notifyProgress: StateFlow<Boolean> = _notifyProgress.asStateFlow()
+
+    fun setNotifyProgress(value: Boolean) {
+        settings.putBoolean(KEY_NOTIFY_PROGRESS, value)
+        _notifyProgress.value = value
+    }
+
+    fun cameraPin(duid: String): String? = settings.getStringOrNull("camera_pin_$duid")
+
+    fun setCameraPin(duid: String, pin: String?) {
+        if (pin.isNullOrBlank()) settings.remove("camera_pin_$duid")
+        else settings.putString("camera_pin_$duid", pin)
+    }
+
+    /**
+     * The room order a full clean of one robot's map should follow, empty when none is set. Kept
+     * here because the robot's own sequence is rewritten whenever picked rooms are cleaned.
+     */
+    fun cleanOrder(duid: String, mapFlag: Int): List<Int> =
+        settings.getStringOrNull("clean_order_${duid}_$mapFlag")
+            ?.split(',')?.mapNotNull { it.toIntOrNull() }
+            ?: emptyList()
+
+    fun setCleanOrder(duid: String, mapFlag: Int, order: List<Int>) {
+        val key = "clean_order_${duid}_$mapFlag"
+        if (order.isEmpty()) settings.remove(key) else settings.putString(key, order.joinToString(","))
+    }
+
+    /** The map's on-screen rotation for one robot: 0, 90, 180 or 270. Remembered per robot. */
+    fun mapRotation(duid: String): Int = settings.getInt("map_rotation_$duid", 0)
+
+    fun setMapRotation(duid: String, degrees: Int) {
+        val normalized = ((degrees % 360) + 360) % 360
+        if (normalized == 0) settings.remove("map_rotation_$duid")
+        else settings.putInt("map_rotation_$duid", normalized)
+    }
+
+    /**
+     * The 3D view's own heading, in degrees. Kept apart from [mapRotation] on purpose: turning the
+     * 3D model around must not disturb the orientation chosen for the flat 2D map.
+     */
+    fun map3DYaw(duid: String): Float = settings.getFloat("map_3d_yaw_$duid", DEFAULT_MAP_3D_YAW)
+
+    fun setMap3DYaw(duid: String, degrees: Float) {
+        settings.putFloat("map_3d_yaw_$duid", degrees)
+    }
+
+    /** How far the 3D camera is tipped from looking straight down, in degrees; 0 is the flat view. */
+    fun map3DTilt(duid: String): Float = settings.getFloat("map_3d_tilt_$duid", DEFAULT_MAP_3D_TILT)
+
+    fun setMap3DTilt(duid: String, degrees: Float) {
+        settings.putFloat("map_3d_tilt_$duid", degrees)
+    }
+
+    /** Whether the map view for one robot shows a tilted 3D perspective instead of flat 2D. */
+    fun map3D(duid: String): Boolean = settings.getBoolean("map_3d_$duid", false)
+
+    fun setMap3D(duid: String, value: Boolean) {
+        if (!value) settings.remove("map_3d_$duid") else settings.putBoolean("map_3d_$duid", true)
+    }
+
+    internal fun readUserDataJson(): String? = settings.getStringOrNull(KEY_USER_DATA)
+
+    internal fun writeUserDataJson(json: String?) {
+        if (json == null) settings.remove(KEY_USER_DATA) else settings.putString(KEY_USER_DATA, json)
+    }
+
+    /**
+     * The server issues a fresh session on every login and rejects MQTT credentials from an
+     * expired one, so the app has to be able to sign in again on its own. The login code is a
+     * static server-config credential, and it lives beside the session secrets already in
+     * [KEY_USER_DATA] rather than anywhere new.
+     */
+    internal fun readLoginCredentials(): Pair<String, String>? {
+        val email = settings.getStringOrNull(KEY_LOGIN_EMAIL) ?: return null
+        val code = settings.getStringOrNull(KEY_LOGIN_CODE) ?: return null
+        return email to code
+    }
+
+    internal fun writeLoginCredentials(email: String?, code: String?) {
+        if (email.isNullOrBlank() || code.isNullOrBlank()) {
+            settings.remove(KEY_LOGIN_EMAIL)
+            settings.remove(KEY_LOGIN_CODE)
+        } else {
+            settings.putString(KEY_LOGIN_EMAIL, email)
+            settings.putString(KEY_LOGIN_CODE, code)
+        }
+    }
+}

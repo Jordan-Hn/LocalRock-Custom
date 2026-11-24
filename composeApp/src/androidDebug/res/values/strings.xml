@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Development builds get their own name and id, so they never replace the released app. -->
+    <string name="app_name">LocalRock Dev</string>
+</resources>

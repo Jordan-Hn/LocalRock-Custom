@@ -1,0 +1,305 @@
+package com.kodraliu.localrock.shared.vacuum
+
+import com.kodraliu.localrock.shared.protocol.V1Response
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonObject
+
+private val StatusJson = Json {
+    ignoreUnknownKeys = true
+    explicitNulls = false
+}
+
+
+suspend fun VacuumSession.appStart(): V1Response = sendCommand("app_start")
+suspend fun VacuumSession.appPause(): V1Response = sendCommand("app_pause")
+suspend fun VacuumSession.appStop(): V1Response = sendCommand("app_stop")
+suspend fun VacuumSession.appCharge(): V1Response = sendCommand("app_charge")
+
+suspend fun VacuumSession.appRooms(): V1Response = sendCommand("get_room_mapping")
+
+suspend fun VacuumSession.appSegmentClean(roomIds: List<Int>, repeat: Int = 1): V1Response {
+    val segments = JsonArray(roomIds.map { JsonPrimitive(it) })
+    val params = listOf(JsonObject(mapOf(
+        "segments" to segments,
+        "repeat" to JsonPrimitive(repeat),
+    )))
+    return sendCommand("app_segment_clean", params)
+}
+
+suspend fun VacuumSession.setCustomMode(level: Int): V1Response =
+    sendCommand("set_custom_mode", listOf(JsonPrimitive(level)))
+
+suspend fun VacuumSession.getConsumableStatus(): V1Response = sendCommand("get_consumable")
+
+suspend fun VacuumSession.setWaterBoxCustomMode(level: Int): V1Response =
+    sendCommand("set_water_box_custom_mode", listOf(JsonPrimitive(level)))
+
+suspend fun VacuumSession.appStartCollectDust(): V1Response = sendCommand("app_start_collect_dust")
+suspend fun VacuumSession.appStartWash(): V1Response = sendCommand("app_start_wash")
+suspend fun VacuumSession.appStopWash(): V1Response = sendCommand("app_stop_wash")
+
+suspend fun VacuumSession.getStatus(): VacuumStatus? {
+    val resp = sendCommand("get_status")
+    val result = resp.result ?: return null
+    val obj: JsonObject = when (result) {
+        is JsonArray -> result.firstOrNull()?.jsonObject ?: return null
+        is JsonObject -> result
+        else -> return null
+    }
+    return StatusJson.decodeFromJsonElement(VacuumStatus.serializer(), obj)
+}
+
+suspend fun VacuumSession.getRoomMapping(): V1Response = sendCommand("get_room_mapping")
+
+suspend fun VacuumSession.getCleanRecord(recordId: Long): V1Response =
+    sendCommand("get_clean_record", listOf(JsonPrimitive(recordId)))
+
+suspend fun VacuumSession.getCleanSummary(): V1Response = sendCommand("get_clean_summary")
+
+// The Curv 2 Flow answers a page of timeline events; the Qrevo Pro does not recognise the method.
+suspend fun VacuumSession.getCleanDetail(begin: Long, from: Int): V1Response = sendCommandRaw(
+    "get_clean_detail",
+    JsonObject(mapOf("begin" to JsonPrimitive(begin), "type" to JsonPrimitive(0), "id" to JsonPrimitive(0), "from" to JsonPrimitive(from))),
+)
+
+suspend fun VacuumSession.resetConsumable(field: String): V1Response =
+    sendCommand("reset_consumable", listOf(JsonPrimitive(field)))
+
+suspend fun VacuumSession.findMe(): V1Response = sendCommand("find_me")
+
+// What the official app sends to drain the robot's built-in water tank through the dock (captured on a
+// Qrevo Pro, firmware 02.15.26): the robot answers ["ok"] and its state goes from 8 to 23. The
+// parameter is an empty object, not an empty list, and python-roborock does not list this command
+// (it has app_empty_rinse_tank_water, a different one).
+internal const val APP_EMPTY_INBUILT_WATER_TANK = "app_empty_inbuilt_water_tank"
+
+internal val EMPTY_INBUILT_WATER_TANK_PARAMS: JsonObject = JsonObject(emptyMap())
+
+suspend fun VacuumSession.emptyInbuiltWaterTank(): V1Response =
+    sendCommandRaw(APP_EMPTY_INBUILT_WATER_TANK, EMPTY_INBUILT_WATER_TANK_PARAMS)
+
+suspend fun VacuumSession.appRcStart(): V1Response = sendCommand("app_rc_start")
+
+suspend fun VacuumSession.appRcMove(velocity: Double, omega: Double, durationMs: Int): V1Response =
+    sendCommand("app_rc_move", listOf(JsonObject(mapOf(
+        "velocity" to JsonPrimitive(velocity),
+        "omega" to JsonPrimitive(omega),
+        "duration" to JsonPrimitive(durationMs),
+    ))))
+
+suspend fun VacuumSession.appRcEnd(): V1Response = sendCommand("app_rc_end")
+
+// The target is the bare point `[x, y]` in robot mm, as python-miio and Valetudo send it. The
+// wrapped form `[[x, y]]` was answered ["ok"] by an S8 Pro Ultra (fw 02.20.30) that then stayed on
+// the dock.
+internal fun gotoTargetParams(x: Int, y: Int): List<JsonElement> = listOf(JsonPrimitive(x), JsonPrimitive(y))
+
+suspend fun VacuumSession.appGotoTarget(x: Int, y: Int): V1Response =
+    sendCommand("app_goto_target", gotoTargetParams(x, y))
+
+// One `[x1, y1, x2, y2, times]` per zone, directly in the params list. Captured from the official
+// app on an S8 Pro Ultra: `[[28050,26300,29050,27300,1]]`.
+internal fun zonedCleanParams(zones: List<ZoneRect>): List<JsonElement> = zones.map { z ->
+    JsonArray(listOf(
+        JsonPrimitive(z.x1), JsonPrimitive(z.y1),
+        JsonPrimitive(z.x2), JsonPrimitive(z.y2),
+        JsonPrimitive(z.times),
+    ))
+}
+
+suspend fun VacuumSession.appZonedClean(zones: List<ZoneRect>): V1Response =
+    sendCommand("app_zoned_clean", zonedCleanParams(zones))
+
+suspend fun VacuumSession.getTimer(): V1Response = sendCommand("get_timer")
+
+suspend fun VacuumSession.setTimer(id: String, enabled: Boolean, cron: String): V1Response =
+    sendCommand("set_timer", listOf(JsonArray(listOf(
+        JsonPrimitive(id),
+        JsonArray(listOf(
+            JsonPrimitive(if (enabled) "on" else "off"),
+            JsonArray(listOf(
+                JsonPrimitive(cron),
+                JsonArray(listOf(JsonPrimitive("start_clean"), JsonObject(emptyMap()))),
+            )),
+        )),
+    ))))
+
+suspend fun VacuumSession.delTimer(id: String): V1Response =
+    sendCommand("del_timer", listOf(JsonPrimitive(id)))
+
+suspend fun VacuumSession.updTimer(id: String, enabled: Boolean): V1Response =
+    sendCommand("upd_timer", listOf(JsonArray(listOf(
+        JsonPrimitive(id),
+        JsonPrimitive(if (enabled) "on" else "off"),
+    ))))
+
+
+// The robot answers "The method called is not recognized by the device" to set_sound_volume,
+// get_child_lock and set_child_lock (checked on a Qrevo Pro). The official app sets the volume with
+// change_sound_volume, and python-roborock names the child lock calls *_child_lock_status.
+internal const val GET_SOUND_VOLUME = "get_sound_volume"
+internal const val CHANGE_SOUND_VOLUME = "change_sound_volume"
+internal const val GET_CHILD_LOCK_STATUS = "get_child_lock_status"
+internal const val SET_CHILD_LOCK_STATUS = "set_child_lock_status"
+
+suspend fun VacuumSession.getSoundVolume(): V1Response = sendCommand(GET_SOUND_VOLUME)
+suspend fun VacuumSession.setSoundVolume(volume: Int): V1Response =
+    sendCommand(CHANGE_SOUND_VOLUME, listOf(JsonPrimitive(volume)))
+
+suspend fun VacuumSession.getChildLock(): V1Response = sendCommand(GET_CHILD_LOCK_STATUS)
+// The lock is the bare object `{"lock_status": 1}`, not a one-item list: a Qrevo Pro answers the list
+// form `[{"lock_status": 1}]` with -10005 "Invalid parameters".
+internal fun childLockParams(locked: Boolean): JsonObject =
+    JsonObject(mapOf("lock_status" to JsonPrimitive(if (locked) 1 else 0)))
+
+suspend fun VacuumSession.setChildLock(locked: Boolean): V1Response =
+    sendCommandRaw(SET_CHILD_LOCK_STATUS, childLockParams(locked))
+
+// Newer firmware keeps many on/off options behind one pair of commands, picked by name:
+// app_get_robot_setting {"name": ...} answers {"status": n}, app_set_robot_setting takes {"name", "status"}.
+internal fun robotSettingReadParams(name: String): JsonObject = JsonObject(mapOf("name" to JsonPrimitive(name)))
+
+internal fun robotSettingWriteParams(name: String, on: Boolean): JsonObject = robotSettingWriteParams(name, if (on) 1 else 0)
+
+internal fun robotSettingWriteParams(name: String, status: Int): JsonObject =
+    JsonObject(mapOf("name" to JsonPrimitive(name), "status" to JsonPrimitive(status)))
+
+suspend fun VacuumSession.getRobotSetting(name: String): V1Response =
+    sendCommandRaw("app_get_robot_setting", robotSettingReadParams(name))
+
+suspend fun VacuumSession.setRobotSetting(name: String, on: Boolean): V1Response =
+    sendCommandRaw("app_set_robot_setting", robotSettingWriteParams(name, on))
+
+suspend fun VacuumSession.setRobotSetting(name: String, status: Int): V1Response =
+    sendCommandRaw("app_set_robot_setting", robotSettingWriteParams(name, status))
+
+suspend fun VacuumSession.getLedStatus(): V1Response = sendCommand("get_led_status")
+// The LED is the bare value `[1]`, the same shape get_led_status answers: an S8 Pro Ultra (a70) and a
+// Qrevo Curv 2 Flow (a245) answer `[{"led_status": 1}]` with -10005 "Invalid type".
+internal fun ledStatusParams(enabled: Boolean): List<JsonPrimitive> = listOf(JsonPrimitive(if (enabled) 1 else 0))
+
+suspend fun VacuumSession.setLedStatus(enabled: Boolean): V1Response =
+    sendCommand("set_led_status", ledStatusParams(enabled))
+
+suspend fun VacuumSession.getMopMode(): V1Response = sendCommand("get_mop_mode")
+suspend fun VacuumSession.setMopMode(mode: Int): V1Response =
+    sendCommand("set_mop_mode", listOf(JsonPrimitive(mode)))
+suspend fun VacuumSession.setCleanMotorMode(fanPower: Int, waterBoxMode: Int, mopMode: Int): V1Response =
+    sendCommandRaw("set_clean_motor_mode", encodeCleanMotorModeParams(fanPower, waterBoxMode, mopMode))
+
+internal fun cleanSequenceTypeParams(
+    type: Int,
+    fanPower: Int,
+    waterBoxMode: Int,
+    mopMode: Int,
+    repeat: Int? = null,
+): JsonObject = JsonObject(buildMap {
+    put("type", JsonPrimitive(type))
+    put("fan_power", JsonPrimitive(fanPower))
+    put("water_box_mode", JsonPrimitive(waterBoxMode))
+    put("mop_mode", JsonPrimitive(mopMode))
+    if (type == 1 && repeat != null) put("repeat", JsonPrimitive(repeat))
+})
+
+suspend fun VacuumSession.setCleanSequenceType(
+    type: Int,
+    fanPower: Int,
+    waterBoxMode: Int,
+    mopMode: Int,
+    repeat: Int? = null,
+): V1Response = sendCommandRaw("app_set_clean_sequence_type", cleanSequenceTypeParams(type, fanPower, waterBoxMode, mopMode, repeat))
+
+suspend fun VacuumSession.appSetDryerStatus(on: Boolean): V1Response =
+    sendCommandRaw("app_set_dryer_status", JsonObject(mapOf("status" to JsonPrimitive(if (on) 1 else 0))))
+
+suspend fun VacuumSession.getCarpetCleanMode(): V1Response = sendCommand("get_carpet_clean_mode")
+// A bare object like the official app; a Curv 2 Flow refuses the list form ("param is not an object").
+suspend fun VacuumSession.setCarpetCleanMode(mode: Int): V1Response =
+    sendCommandRaw("set_carpet_clean_mode", JsonObject(mapOf("carpet_clean_mode" to JsonPrimitive(mode))))
+
+
+suspend fun VacuumSession.getWashTowelMode(): V1Response = sendCommand("get_wash_towel_mode")
+suspend fun VacuumSession.setWashTowelMode(mode: Int): V1Response =
+    sendCommandRaw("set_wash_towel_mode", JsonObject(mapOf("wash_mode" to JsonPrimitive(mode))))
+
+suspend fun VacuumSession.getSmartWashParams(): V1Response = sendCommand("get_smart_wash_params")
+suspend fun VacuumSession.setSmartWashParams(settings: SmartWashSettings): V1Response =
+    sendCommandRaw("set_smart_wash_params", encodeSmartWashParams(settings))
+
+suspend fun VacuumSession.getInitStatus(): V1Response = sendCommand("app_get_init_status")
+suspend fun VacuumSession.getDryerSetting(): V1Response = sendCommand("app_get_dryer_setting")
+
+suspend fun VacuumSession.setDryerSetting(body: JsonObject): V1Response = sendCommandRaw("app_set_dryer_setting", body)
+
+suspend fun VacuumSession.getWashWaterTemperature(): V1Response = sendCommand("get_wash_water_temperature")
+suspend fun VacuumSession.setWashWaterTemperature(value: Int): V1Response =
+    sendCommandRaw("set_wash_water_temperature", JsonObject(mapOf("values" to JsonPrimitive(value))))
+
+suspend fun VacuumSession.getValleyElectricityTimer(): V1Response = sendCommand("get_valley_electricity_timer")
+suspend fun VacuumSession.setValleyElectricityTimer(startHour: Int, startMinute: Int, endHour: Int, endMinute: Int): V1Response =
+    sendCommand("set_valley_electricity_timer", listOf(
+        JsonPrimitive(startHour), JsonPrimitive(startMinute), JsonPrimitive(endHour), JsonPrimitive(endMinute),
+    ))
+suspend fun VacuumSession.closeValleyElectricityTimer(): V1Response = sendCommand("close_valley_electricity_timer")
+
+suspend fun VacuumSession.getDustCollectionMode(): V1Response = sendCommand("get_dust_collection_mode")
+suspend fun VacuumSession.setDustCollectionMode(mode: Int): V1Response =
+    sendCommandRaw("set_dust_collection_mode", JsonObject(mapOf("mode" to JsonPrimitive(mode))))
+
+
+suspend fun VacuumSession.getDndTimer(): V1Response = sendCommand("get_dnd_timer")
+suspend fun VacuumSession.setDndTimer(startHour: Int, startMinute: Int, endHour: Int, endMinute: Int): V1Response =
+    sendCommand("set_dnd_timer", listOf(JsonObject(mapOf(
+        "start_hour" to JsonPrimitive(startHour),
+        "start_minute" to JsonPrimitive(startMinute),
+        "end_hour" to JsonPrimitive(endHour),
+        "end_minute" to JsonPrimitive(endMinute),
+    ))))
+suspend fun VacuumSession.closeDndTimer(): V1Response = sendCommand("close_dnd_timer")
+
+
+suspend fun VacuumSession.getMultiMapsList(): V1Response = sendCommand("get_multi_maps_list")
+
+
+suspend fun VacuumSession.checkHomesecPassword(passwordMd5Hex: String): V1Response =
+    sendCommandRaw("check_homesec_password", JsonObject(mapOf("password" to JsonPrimitive(passwordMd5Hex))))
+
+suspend fun VacuumSession.setHomesecPassword(passwordMd5Hex: String): V1Response =
+    sendCommandRaw("set_homesec_password", JsonObject(mapOf("password" to JsonPrimitive(passwordMd5Hex))))
+
+suspend fun VacuumSession.resetHomesecPassword(): V1Response = sendCommand("reset_homesec_password")
+
+suspend fun VacuumSession.getHomesecConnectStatus(): V1Response =
+    sendCommand("get_homesec_connect_status")
+
+suspend fun VacuumSession.startCameraPreview(clientIdHex: String, passwordMd5Hex: String): V1Response =
+    sendCommandRaw("start_camera_preview", JsonObject(mapOf(
+        "client_id" to JsonPrimitive(clientIdHex),
+        "quality" to JsonPrimitive("HD"),
+        "password" to JsonPrimitive(passwordMd5Hex),
+    )))
+
+suspend fun VacuumSession.stopCameraPreview(clientIdHex: String): V1Response =
+    sendCommandRaw("stop_camera_preview", JsonObject(mapOf("client_id" to JsonPrimitive(clientIdHex))))
+
+/** Camera enable/permission flag the robot checks before allowing a preview (see error -10012). */
+suspend fun VacuumSession.getCameraStatus(): V1Response = sendCommand("get_camera_status")
+
+suspend fun VacuumSession.setCameraStatus(status: Int): V1Response =
+    sendCommand("set_camera_status", listOf(JsonPrimitive(status)))
+
+suspend fun VacuumSession.getTurnServer(): V1Response = sendCommand("get_turn_server")
+
+suspend fun VacuumSession.sendSdpToRobot(appSdpBase64: String): V1Response =
+    sendCommandRaw("send_sdp_to_robot", JsonObject(mapOf("app_sdp" to JsonPrimitive(appSdpBase64))))
+
+suspend fun VacuumSession.getDeviceSdp(): V1Response = sendCommand("get_device_sdp")
+
+suspend fun VacuumSession.sendIceToRobot(appIceBase64: String): V1Response =
+    sendCommandRaw("send_ice_to_robot", JsonObject(mapOf("app_ice" to JsonPrimitive(appIceBase64))))
+
+suspend fun VacuumSession.getDeviceIce(): V1Response = sendCommand("get_device_ice")
