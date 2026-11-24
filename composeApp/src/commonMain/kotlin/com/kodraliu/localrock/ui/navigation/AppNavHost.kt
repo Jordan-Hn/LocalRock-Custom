@@ -224,6 +224,13 @@ fun AppNavHost() {
                 VacuumSettingsScreen(
                     viewModel = viewModel,
                     onBack = { navController.popBackStack() },
+                    onSchedule = { navController.navigate(VacuumSchedule) },
+                    onManageMaps = { navController.navigate(VacuumMapEdit) },
+                    onRemoteView = {
+                        viewModel.requestedRemoteTab = com.kodraliu.localrock.ui.vacuum.RemoteTab.DRIVE
+                        navController.navigate(VacuumCamera)
+                    },
+                    onPinGo = { navController.navigate(VacuumPinGo) },
                 )
             }
 

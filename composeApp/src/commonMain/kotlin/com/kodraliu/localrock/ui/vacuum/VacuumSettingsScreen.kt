@@ -23,6 +23,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Gamepad
+import androidx.compose.material.icons.filled.Place
+import androidx.compose.material.icons.filled.Bedtime
+import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.Air
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Autorenew
@@ -177,6 +181,10 @@ private sealed interface SettingsRoute {
 fun VacuumSettingsScreen(
     viewModel: VacuumViewModel,
     onBack: () -> Unit,
+    onSchedule: () -> Unit = {},
+    onManageMaps: () -> Unit = {},
+    onRemoteView: () -> Unit = {},
+    onPinGo: () -> Unit = {},
 ) {
     val repository = viewModel.repository
     val mapRotation = 0 // the live map has no rotation setting yet (#81 adds it)
@@ -221,6 +229,10 @@ fun VacuumSettingsScreen(
             onCheckUpdate = { route = SettingsRoute.Firmware },
             onBack = onBack,
             onHistory = { route = SettingsRoute.History },
+            onSchedule = onSchedule,
+            onManageMaps = onManageMaps,
+            onRemoteView = onRemoteView,
+            onPinGo = onPinGo,
             onMaintenance = {
                 scope.launch { runCatching { repository.fetchConsumableStatus() } }
                 route = SettingsRoute.Maintenance
@@ -428,6 +440,10 @@ private fun SettingsRootScreen(
     onCheckUpdate: () -> Unit,
     onBack: () -> Unit,
     onHistory: () -> Unit,
+    onSchedule: () -> Unit,
+    onManageMaps: () -> Unit,
+    onRemoteView: () -> Unit,
+    onPinGo: () -> Unit,
     onMaintenance: () -> Unit,
     onCarpet: () -> Unit,
     onFloor: (() -> Unit)?,
@@ -452,117 +468,41 @@ private fun SettingsRootScreen(
     ) { padding ->
         CenteredContent {
             LazyColumn(contentPadding = padding) {
-                item {
-                    SettingsCategoryRow(
-                        icon = Icons.Default.History,
-                        iconTint = AppColors.AccentCyan,
-                        title = "Cleaning history",
-                        subtitle = "Past cleaning sessions and totals",
-                        onClick = onHistory,
-                    )
+                // The official menu's order: history first, then schedules, upkeep, cleaning, dock,
+                // obstacles, maps, the camera, extras, the robot itself, and the manual-drive tools.
+                val rows = buildList<SettingsEntry> {
+                    add(SettingsEntry(Icons.Default.History, AppColors.AccentCyan, "Cleaning history", "Past cleaning sessions and totals", onHistory))
+                    add(SettingsEntry(Icons.Default.Schedule, AppColors.Brand, "Schedules", "Timed cleans for whole home or rooms", onSchedule))
+                    add(SettingsEntry(Icons.Default.Build, AppColors.Good, "Maintenance", "Brush life and consumables", onMaintenance))
+                    add(SettingsEntry(Icons.Default.GridView, AppColors.Good, "Carpet cleaning", "Carpet mode and deep cleaning", onCarpet))
+                    onFloor?.let { add(SettingsEntry(Icons.Default.CleaningServices, AppColors.AccentCyan, "Floor cleaning", "Floor types, FlexiArm and pet areas", it)) }
+                    add(SettingsEntry(Icons.Default.Home, AppColors.Water, "Dock settings", "Auto-empty, wash and dry options", onDockSettings))
+                    onObstacle?.let { add(SettingsEntry(Icons.Default.Sensors, AppColors.AccentYellow, "Obstacle avoidance", "Collision and object detection", it)) }
+                    add(SettingsEntry(Icons.Default.Map, AppColors.Brand, "Manage maps", "Edit rooms, no-go zones and saved maps", onManageMaps))
+                    add(SettingsEntry(Icons.Default.Videocam, AppColors.AccentRed, "Remote view", "Live camera, remote control and pet search", onRemoteView))
+                    onMatter?.let { add(SettingsEntry(Icons.Default.Link, AppColors.AccentIndigo, "Matter", "Add the robot to Apple Home, Google Home and more", it)) }
+                    onBetaFeatures?.let { add(SettingsEntry(Icons.Default.Science, AppColors.AccentCyan, "Beta features", "Other options your robot reports", it)) }
+                    add(SettingsEntry(Icons.Default.Settings, AppColors.AccentPurple, "Robot settings", "Volume, child lock and more", onRobotSettings))
+                    add(SettingsEntry(Icons.Default.Bedtime, AppColors.AccentIndigo, "Do Not Disturb", "Set quiet hours for cleaning", onDndMode))
+                    add(SettingsEntry(Icons.Default.Place, AppColors.AccentPurple, "Pin & Go", "Send the robot to a spot on the map", onPinGo))
+                    add(SettingsEntry(Icons.Default.Gamepad, AppColors.AccentCyan, "Remote control", "Drive the robot by hand", onRemoteView))
                 }
-                item { HorizontalDivider(Modifier.padding(start = 72.dp)) }
-                item {
-                    SettingsCategoryRow(
-                        icon = Icons.Default.Build,
-                        iconTint = AppColors.Good,
-                        title = "Maintenance",
-                        subtitle = "Brush life and consumables",
-                        onClick = onMaintenance,
-                    )
-                }
-                item { HorizontalDivider(Modifier.padding(start = 72.dp)) }
-                item {
-                    SettingsCategoryRow(
-                        icon = Icons.Default.GridView,
-                        iconTint = AppColors.Good,
-                        title = "Carpet cleaning",
-                        subtitle = "Carpet mode and deep cleaning",
-                        onClick = onCarpet,
-                    )
-                }
-                if (onFloor != null) {
-                    item { HorizontalDivider(Modifier.padding(start = 72.dp)) }
+                rows.forEachIndexed { index, row ->
+                    if (index > 0) item { HorizontalDivider(Modifier.padding(start = 72.dp)) }
                     item {
                         SettingsCategoryRow(
-                            icon = Icons.Default.CleaningServices,
-                            iconTint = AppColors.AccentCyan,
-                            title = "Floor cleaning",
-                            subtitle = "Floor types, FlexiArm and pet areas",
-                            onClick = onFloor,
-                        )
-                    }
-                }
-                item { HorizontalDivider(Modifier.padding(start = 72.dp)) }
-                item {
-                    SettingsCategoryRow(
-                        icon = Icons.Default.Home,
-                        iconTint = AppColors.Water,
-                        title = "Dock settings",
-                        subtitle = "Auto-empty, wash and dry options",
-                        onClick = onDockSettings,
-                    )
-                }
-                if (onObstacle != null) {
-                    item { HorizontalDivider(Modifier.padding(start = 72.dp)) }
-                    item {
-                        SettingsCategoryRow(
-                            icon = Icons.Default.Sensors,
-                            iconTint = AppColors.AccentYellow,
-                            title = "Obstacle avoidance",
-                            subtitle = "Collision and object detection",
-                            onClick = onObstacle,
-                        )
-                    }
-                }
-                item { HorizontalDivider(Modifier.padding(start = 72.dp)) }
-                item {
-                    SettingsCategoryRow(
-                        icon = Icons.Default.Settings,
-                        iconTint = AppColors.AccentPurple,
-                        title = "Robot settings",
-                        subtitle = "Volume, child lock and more",
-                        onClick = onRobotSettings,
-                    )
-                }
-                item { HorizontalDivider(Modifier.padding(start = 72.dp)) }
-                item {
-                    SettingsCategoryRow(
-                        icon = Icons.Default.Schedule,
-                        iconTint = AppColors.AccentIndigo,
-                        title = "Do Not Disturb",
-                        subtitle = "Set quiet hours for cleaning",
-                        onClick = onDndMode,
-                    )
-                }
-                if (onMatter != null) {
-                    item { HorizontalDivider(Modifier.padding(start = 72.dp)) }
-                    item {
-                        SettingsCategoryRow(
-                            icon = Icons.Default.Link,
-                            iconTint = AppColors.AccentIndigo,
-                            title = "Matter",
-                            subtitle = "Add the robot to Apple Home, Google Home and more",
-                            onClick = onMatter,
-                        )
-                    }
-                }
-                if (onBetaFeatures != null) {
-                    item { HorizontalDivider(Modifier.padding(start = 72.dp)) }
-                    item {
-                        SettingsCategoryRow(
-                            icon = Icons.Default.Science,
-                            iconTint = AppColors.AccentCyan,
-                            title = "Beta features",
-                            subtitle = "Other options your robot reports",
-                            onClick = onBetaFeatures,
+                            icon = row.icon,
+                            iconTint = row.tint,
+                            title = row.title,
+                            subtitle = row.subtitle,
+                            onClick = row.onClick,
                         )
                     }
                 }
 
                 item {
                     Text(
-                        "Firmware",
+                        "Product info",
                         style = MaterialTheme.typography.labelLarge,
                         color = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.padding(start = 16.dp, top = 20.dp, bottom = 4.dp),
@@ -2357,3 +2297,13 @@ private fun timelineOffset(seconds: Long): String {
     val minutes = (total % 3600) / 60
     return if (hours > 0) "+$hours:${minutes.toString().padStart(2, '0')}h" else "+${minutes}m"
 }
+
+
+/** One row of the settings menu. */
+private class SettingsEntry(
+    val icon: androidx.compose.ui.graphics.vector.ImageVector,
+    val tint: androidx.compose.ui.graphics.Color,
+    val title: String,
+    val subtitle: String,
+    val onClick: () -> Unit,
+)
