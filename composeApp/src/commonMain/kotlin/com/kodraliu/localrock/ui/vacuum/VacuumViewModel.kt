@@ -8,6 +8,8 @@ import com.kodraliu.localrock.shared.model.Scene
 import com.kodraliu.localrock.shared.model.SceneRunResult
 import com.kodraliu.localrock.shared.vacuum.AdvertisedFeature
 import com.kodraliu.localrock.shared.vacuum.RoutineDraft
+import com.kodraliu.localrock.shared.vacuum.RoutineSchedule
+import com.kodraliu.localrock.shared.vacuum.withRoutineSchedules
 import com.kodraliu.localrock.shared.vacuum.buildRoutineParam
 import com.kodraliu.localrock.shared.http.currentEpochSeconds
 import com.kodraliu.localrock.shared.vacuum.BetaFeatureDef
@@ -498,6 +500,12 @@ class VacuumViewModel(
             }
             loadRoutines()
         }
+
+    /** Replaces a routine's schedules; its steps are sent back untouched. */
+    fun saveRoutineSchedules(scene: Scene, schedules: List<RoutineSchedule>, message: String) = run(message) {
+        container.deviceRepository.updateSceneParam(scene.id, withRoutineSchedules(scene.param, schedules))
+        loadRoutines()
+    }
 
     fun renameRoutine(scene: Scene, name: String) = run("Routine renamed") {
         container.deviceRepository.renameScene(scene.id, name)

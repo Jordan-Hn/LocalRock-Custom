@@ -186,3 +186,69 @@ fun routineScheduleLabel(draft: RoutineDraft): String? {
     }
     return null
 }
+
+/** One time trigger of a routine: when it runs, on which days (0 = Sunday), and whether it's on. */
+data class RoutineSchedule(
+    val id: Long,
+    val hour: Int,
+    val minute: Int,
+    /** Days it runs, 0 = Sunday ... 6 = Saturday. */
+    val days: Set<Int>,
+    val enabled: Boolean,
+    val timeZoneId: String,
+)
+
+/** The routine's TIMER triggers. Other trigger types are left alone and not listed. */
+fun routineSchedules(param: JsonElement?): List<RoutineSchedule> {
+    val root = param.asObject() ?: return emptyList()
+    val triggers = root["triggers"] as? JsonArray ?: return emptyList()
+    return triggers.mapNotNull { t ->
+        val obj = t as? JsonObject ?: return@mapNotNull null
+        if ((obj["type"] as? JsonPrimitive)?.contentOrNull != "TIMER") return@mapNotNull null
+        val p = obj["param"].asObject() ?: return@mapNotNull null
+        val cron = (p["cron"] as? JsonPrimitive)?.contentOrNull?.split(" ") ?: return@mapNotNull null
+        val minute = cron.getOrNull(0)?.toIntOrNull() ?: return@mapNotNull null
+        val hour = cron.getOrNull(1)?.toIntOrNull() ?: return@mapNotNull null
+        val dow = cron.getOrNull(4) ?: "*"
+        val days = if (dow == "*" || dow == "?") (0..6).toSet()
+        else dow.split(",").mapNotNull { it.trim().toIntOrNull()?.rem(7) }.toSet()
+        RoutineSchedule(
+            id = (obj["id"] as? JsonPrimitive)?.contentOrNull?.toLongOrNull() ?: 0L,
+            hour = hour,
+            minute = minute,
+            days = days,
+            enabled = (p["enabled"] as? JsonPrimitive)?.contentOrNull != "false",
+            timeZoneId = (p["timeZoneId"] as? JsonPrimitive)?.contentOrNull ?: "UTC",
+        )
+    }
+}
+
+private fun RoutineSchedule.toTrigger(): JsonObject {
+    val cron = "$minute $hour * * ${days.sorted().joinToString(",")}"
+    // The trigger's own param is a JSON string, as the official app stores it.
+    val param = buildJsonObject {
+        put("cron", cron)
+        put("type", "NORMAL")
+        put("enabled", enabled)
+        put("repeated", true)
+        put("timeZoneId", timeZoneId)
+    }
+    return buildJsonObject {
+        put("id", id)
+        put("type", "TIMER")
+        put("entityId", "")
+        put("param", param.toString())
+    }
+}
+
+/**
+ * The scene param with its TIMER triggers replaced by [schedules]. The steps and any other trigger
+ * stay exactly as they were, so changing a schedule never touches what the routine cleans.
+ */
+fun withRoutineSchedules(param: JsonElement?, schedules: List<RoutineSchedule>): JsonObject {
+    val root = param.asObject() ?: JsonObject(emptyMap())
+    val others = (root["triggers"] as? JsonArray)?.filter {
+        ((it as? JsonObject)?.get("type") as? JsonPrimitive)?.contentOrNull != "TIMER"
+    } ?: emptyList()
+    return JsonObject(root + ("triggers" to JsonArray(others + schedules.map { it.toTrigger() })))
+}
