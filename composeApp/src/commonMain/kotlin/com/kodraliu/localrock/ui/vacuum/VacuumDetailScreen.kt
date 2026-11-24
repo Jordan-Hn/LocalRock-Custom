@@ -366,7 +366,8 @@ fun VacuumDetailScreen(
             MoreAction.ROOMS -> panel = DetailPanel.Rooms
             MoreAction.DOCK -> panel = DetailPanel.Dock
             MoreAction.MAPS -> panel = DetailPanel.Maps
-            MoreAction.ROUTINES -> panel = DetailPanel.Routines
+            // Routines live in the panel's Routine tab, where they can be run, edited and created.
+            MoreAction.ROUTINES -> { panel = null; cleanTarget = CleanTarget.ROUTINE }
             MoreAction.ZONES -> { panel = null; onZoneClean() }
             MoreAction.PIN_GO -> { panel = null; onPinGo() }
             MoreAction.REMOTE -> { panel = null; viewModel.requestedRemoteTab = RemoteTab.DRIVE; onCamera() }
@@ -487,6 +488,10 @@ fun VacuumDetailScreen(
                 val water = status.waterBoxCustomMode?.takeUnless { it in planWaterCodes }
                     ?: if (supportsWaterSlide) WaterBoxMode.SLIDE_MEDIUM else WaterBoxMode.LOW
                 val routeWasPlan = mopMode == MopRoute.SMART || mopMode == MopRoute.CUSTOM
+                // While SmartPlan or Customize owns the settings the robot refuses single changes (-10005),
+                // so leaving them sends suction, water and route together.
+                val leavingPlan = routeWasPlan || status.fanPower == VacuumFanPower.SMART || status.fanPower == VacuumFanPower.CUSTOM ||
+                    status.waterBoxCustomMode == WaterBoxMode.SMART || status.waterBoxCustomMode == WaterBoxMode.CUSTOM
                 val route = mopMode?.takeUnless { routeWasPlan } ?: MopRoute.STANDARD
                 // A refusal is shown in the sheet; the screen's own message would be behind it.
                 var modeError by remember { mutableStateOf<String?>(null) }
@@ -538,15 +543,15 @@ fun VacuumDetailScreen(
                                     if (mode == 3) 1 else 0, modeFan, modeWater, modeRoute,
                                     if (mode == 3 && supportsVacuumThenMopRepeat) 1 else null,
                                 )
+                            } else if (leavingPlan) {
+                                it.setCleanMotorMode(modeFan, modeWater, modeRoute)
                             } else if (modeFan == VacuumFanPower.OFF) {
                                 // The robot rejects turning suction off while water is also off.
                                 it.setWaterBoxMode(modeWater)
                                 it.setFanPower(modeFan)
-                                if (routeWasPlan) it.setMopMode(modeRoute)
                             } else {
                                 it.setFanPower(modeFan)
                                 it.setWaterBoxMode(modeWater)
-                                if (routeWasPlan) it.setMopMode(modeRoute)
                             }
                         }
                     },
