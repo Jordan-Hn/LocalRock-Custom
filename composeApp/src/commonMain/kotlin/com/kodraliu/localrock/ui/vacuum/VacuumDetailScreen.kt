@@ -9,6 +9,10 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.material.icons.filled.Timeline
+import androidx.compose.material.icons.filled.CleaningServices
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -199,9 +203,9 @@ import kotlinx.coroutines.delay
 
 private val FAN_OPTIONS = listOf(
     VacuumFanPower.QUIET to "Quiet",
-    VacuumFanPower.BALANCED to "Standard",
-    VacuumFanPower.TURBO to "Strong",
-    VacuumFanPower.MAX to "MAX",
+    VacuumFanPower.BALANCED to "Balanced",
+    VacuumFanPower.TURBO to "Turbo",
+    VacuumFanPower.MAX to "Max",
 )
 
 /** A room can also go without suction, the official app's mop-only setting. */
@@ -210,7 +214,7 @@ private val ROOM_FAN_OPTIONS = listOf(VacuumFanPower.OFF to "Off") + FAN_OPTIONS
 private val WATER_OPTIONS = listOf(
     WaterBoxMode.OFF to "Off",
     WaterBoxMode.LOW to "Low",
-    WaterBoxMode.MEDIUM to "Med",
+    WaterBoxMode.MEDIUM to "Medium",
     WaterBoxMode.HIGH to "High",
 )
 
@@ -465,14 +469,23 @@ fun VacuumDetailScreen(
                 onWashModeChange = { mode -> viewModel.run { repo -> repo.setWashMode(mode) } },
                 onWashFrequencyChange = { mode, minutes -> viewModel.run { repo -> repo.setWashFrequency(mode, minutes) } },
                 onAutoEmptyModeChange = { mode -> viewModel.run { repo -> repo.setAutoEmptyMode(mode) } },
+                onReturnToDock = {
+                    panel = null
+                    sessionRoomIds = emptyList()
+                    viewModel.run("Returning to dock") { it.dock() }
+                },
             )
 
             DetailPanel.CleaningMode -> {
                 val vacuumThenMop = status.cleanSequenceType == 1
-                val fan = status.fanPower?.takeUnless { it == VacuumFanPower.OFF } ?: VacuumFanPower.BALANCED
-                val water = status.waterBoxCustomMode?.takeUnless { it == WaterBoxMode.OFF }
+                // SmartPlan and Customize report their own codes; a manual mode picked from them starts from plain defaults.
+                val planFanCodes = setOf(VacuumFanPower.OFF, VacuumFanPower.SMART, VacuumFanPower.CUSTOM)
+                val planWaterCodes = setOf(WaterBoxMode.OFF, WaterBoxMode.SMART, WaterBoxMode.CUSTOM)
+                val fan = status.fanPower?.takeUnless { it in planFanCodes } ?: VacuumFanPower.BALANCED
+                val water = status.waterBoxCustomMode?.takeUnless { it in planWaterCodes }
                     ?: if (supportsWaterSlide) WaterBoxMode.SLIDE_MEDIUM else WaterBoxMode.LOW
-                val route = mopMode ?: MopRoute.STANDARD
+                val routeWasPlan = mopMode == MopRoute.SMART || mopMode == MopRoute.CUSTOM
+                val route = mopMode?.takeUnless { routeWasPlan } ?: MopRoute.STANDARD
                 // A refusal is shown in the sheet; the screen's own message would be behind it.
                 var modeError by remember { mutableStateOf<String?>(null) }
                 fun runMode(successMessage: String? = null, action: suspend (VacuumRepository) -> Unit) {
@@ -527,9 +540,11 @@ fun VacuumDetailScreen(
                                 // The robot rejects turning suction off while water is also off.
                                 it.setWaterBoxMode(modeWater)
                                 it.setFanPower(modeFan)
+                                if (routeWasPlan) it.setMopMode(modeRoute)
                             } else {
                                 it.setFanPower(modeFan)
                                 it.setWaterBoxMode(modeWater)
+                                if (routeWasPlan) it.setMopMode(modeRoute)
                             }
                         }
                     },
@@ -635,6 +650,7 @@ fun VacuumDetailScreen(
                 viewModel.run("Returning to dock") { it.dock() }
             },
             onCleaningMode = { panel = DetailPanel.CleaningMode },
+            onDockMenu = { panel = DetailPanel.Dock },
             routines = routines,
             selectedRoutine = selectedRoutine,
             onSelectRoutine = { selectedRoutine = if (selectedRoutine?.id == it.id) null else it },
@@ -1572,12 +1588,44 @@ private fun CleaningModeSheetContent(
         if (rooms.isNotEmpty() || perRoom) add(CleanPlan.PER_ROOM)
     }
 
+    // One row of mode cards, as the official sheet has, in place of a plan picker over mode tabs.
+    val current = when {
+        smart -> SheetMode.SMART
+        perRoom -> SheetMode.CUSTOM
+        selectedTab == 3 -> SheetMode.VAC_THEN_MOP
+        selectedTab == 2 -> SheetMode.VACUUM
+        selectedTab == 1 -> SheetMode.MOP
+        else -> SheetMode.VAC_MOP
+    }
+    val modes = buildList {
+        if (CleanPlan.SMART in plans) add(SheetMode.SMART)
+        add(SheetMode.VAC_MOP); add(SheetMode.VACUUM); add(SheetMode.MOP)
+        if (supportsVacuumThenMop || currentSequenceType == 1) add(SheetMode.VAC_THEN_MOP)
+        if (CleanPlan.PER_ROOM in plans) add(SheetMode.CUSTOM)
+    }
+
     Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = 16.dp)) {
-        Spacer(Modifier.height(12.dp))
-        if (plans.size > 1) {
-            Box(Modifier.padding(horizontal = 24.dp).padding(bottom = 12.dp)) {
-                ModeOptionSelector("Mode", plans.map { it.label }, plans.indexOf(plan), !busy) {
-                    if (plans[it] != plan) onPlanSelected(plans[it])
+        Text(
+            "Cleaning mode",
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp),
+        )
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            modes.forEach { mode ->
+                ModeCard(mode, selected = mode == current, enabled = !busy) {
+                    if (mode == current) return@ModeCard
+                    when (mode) {
+                        SheetMode.SMART -> onPlanSelected(CleanPlan.SMART)
+                        SheetMode.CUSTOM -> onPlanSelected(CleanPlan.PER_ROOM)
+                        SheetMode.VAC_MOP -> onModeSelected(0)
+                        SheetMode.MOP -> onModeSelected(1)
+                        SheetMode.VACUUM -> onModeSelected(2)
+                        SheetMode.VAC_THEN_MOP -> onModeSelected(3)
+                    }
                 }
             }
         }
@@ -1607,19 +1655,6 @@ private fun CleaningModeSheetContent(
                 )
             }
         } else {
-            SecondaryTabRow(selectedTabIndex = selectedTab) {
-                val tabs = listOf("Vac & Mop", "Mop", "Vacuum") +
-                    if (supportsVacuumThenMop || currentSequenceType == 1) listOf("Vac → Mop") else emptyList()
-                tabs.forEachIndexed { i, title ->
-                    Tab(
-                        selected = selectedTab == i,
-                        enabled = !busy,
-                        onClick = { onModeSelected(i) },
-                        text = { Text(title) },
-                    )
-                }
-            }
-
             Box(Modifier.fillMaxWidth().heightIn(min = 380.dp)) {
                 Column(
                     modifier = Modifier
@@ -1639,7 +1674,8 @@ private fun CleaningModeSheetContent(
                         ModeOptionSelector("Suction power", FAN_OPTIONS.map { it.second }, FAN_OPTIONS.indexOfFirst { it.first == currentFanPower }, !busy) { onFanPowerSelected(FAN_OPTIONS[it].first) }
                     }
                     val water = @Composable {
-                        val options = if (selectedTab == 3) WATER_OPTIONS.filter { it.first != WaterBoxMode.OFF } else WATER_OPTIONS
+                        // Water off is Vacuum mode, so the mopping modes only offer real flow levels.
+                        val options = WATER_OPTIONS.filter { it.first != WaterBoxMode.OFF }
                         ModeOptionSelector("Water flow", options.map { it.second }, options.indexOfFirst { it.first == WaterBoxMode.normalize(currentWaterMode) }, !busy) { onWaterModeSelected(options[it].first) }
                     }
                     val route = @Composable {
@@ -1665,6 +1701,38 @@ private enum class CleanPlan(val label: String) {
     SMART("SmartPlan"),
     MANUAL("Manual"),
     PER_ROOM("Per room"),
+}
+
+private enum class SheetMode(val label: String, val icon: ImageVector) {
+    SMART("SmartPlan", Icons.Default.AutoAwesome),
+    VAC_MOP("Vac & Mop", Icons.Default.CleaningServices),
+    VACUUM("Vacuum", Icons.Default.Air),
+    MOP("Mop", Icons.Default.WaterDrop),
+    VAC_THEN_MOP("Vac then Mop", Icons.Default.Timeline),
+    CUSTOM("Customize", Icons.Default.Tune),
+}
+
+/** A mode as a card with its icon over its name; the picked one fills with the brand blue. */
+@Composable
+private fun ModeCard(mode: SheetMode, selected: Boolean, enabled: Boolean, onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
+        enabled = enabled,
+        shape = RoundedCornerShape(18.dp),
+        color = if (selected) CleanAccent else MaterialTheme.colorScheme.surfaceContainerHigh,
+        contentColor = if (selected) Color.White else MaterialTheme.colorScheme.onSurface,
+        modifier = Modifier.width(92.dp).height(88.dp),
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+            modifier = Modifier.padding(6.dp),
+        ) {
+            Icon(mode.icon, contentDescription = null, modifier = Modifier.size(26.dp))
+            Spacer(Modifier.height(8.dp))
+            Text(mode.label, style = MaterialTheme.typography.labelMedium, textAlign = TextAlign.Center, maxLines = 2)
+        }
+    }
 }
 
 private fun roomModeSummary(mode: RoomCleanMode): String {
@@ -1771,11 +1839,11 @@ private fun ModeOptionSelector(label: String, options: List<String>, selectedInd
                     onClick = { if (enabled) onSelect(index) },
                     modifier = Modifier.weight(1f),
                     shape = CircleShape,
-                    color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh,
+                    color = if (selected) CleanAccent else MaterialTheme.colorScheme.surfaceContainerHigh,
                 ) {
                     Text(option, modifier = Modifier.padding(vertical = 14.dp), style = MaterialTheme.typography.labelMedium,
                         fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-                        color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = if (selected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.Center)
                 }
             }
@@ -1820,6 +1888,7 @@ private fun DockSheetContent(
     onWashModeChange: (Int) -> Unit,
     onWashFrequencyChange: (Int, Int?) -> Unit,
     onAutoEmptyModeChange: (Int) -> Unit,
+    onReturnToDock: () -> Unit,
 ) {
     var selectedTab by remember { mutableIntStateOf(0) }
 
@@ -1832,7 +1901,7 @@ private fun DockSheetContent(
         }
         Box(Modifier.fillMaxWidth().heightIn(min = 340.dp)) {
             when (selectedTab) {
-                0 -> DockControlTab(status, busy, onEmptyDustbin, onWashMop, onDryMop, onStopDry)
+                0 -> DockControlTab(status, busy, onEmptyDustbin, onWashMop, onDryMop, onStopDry, onReturnToDock)
                 1 -> DockSettingsTab(
                     dockSettings, dockCapabilities, status.dockType, status.dockStatus, busy,
                     onWashModeChange, onWashFrequencyChange, onAutoEmptyModeChange,
@@ -1850,15 +1919,29 @@ private fun DockControlTab(
     onWashMop: () -> Unit,
     onDryMop: () -> Unit,
     onStopDry: () -> Unit,
+    onReturnToDock: () -> Unit,
 ) {
     val waterAttached = status.waterBoxStatus == 1
     val dockError = status.dockErrorStatus
     val drying = status.dryStatus == 1 || status.state == VacuumStateCodes.DRYING_MOP
+    val docked = isDocked(status.state)
 
     Column(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 16.dp),
         verticalArrangement = Arrangement.spacedBy(24.dp),
     ) {
+        // Sending the robot home is the dock button's first job, so it leads the sheet.
+        Button(
+            onClick = onReturnToDock,
+            enabled = !busy && !docked,
+            colors = ButtonDefaults.buttonColors(containerColor = CleanAccent, contentColor = Color.White),
+            shape = CircleShape,
+            modifier = Modifier.fillMaxWidth().height(52.dp),
+        ) {
+            Icon(Icons.Default.Home, contentDescription = null)
+            Spacer(Modifier.width(8.dp))
+            Text(if (docked) "On the dock" else "Return to dock", fontWeight = FontWeight.SemiBold)
+        }
         Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             DockStatusRow(
                 label = "Clean water tank",
@@ -2881,6 +2964,7 @@ private fun CleanPanel(
     onStop: () -> Unit,
     onDock: () -> Unit,
     onCleaningMode: () -> Unit,
+    onDockMenu: () -> Unit,
     routines: RoutinesState,
     selectedRoutine: Scene?,
     onSelectRoutine: (Scene) -> Unit,
@@ -2957,7 +3041,8 @@ private fun CleanPanel(
                     }
                 }
                 Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
-                    SideAction(Icons.Default.Home, "Dock", enabled = !busy, onClick = onDock)
+                    // Mid-clean it sends the robot home at once; otherwise it opens the dock's controls.
+                    SideAction(Icons.Default.Home, "Dock", enabled = !busy, onClick = if (active) onDock else onDockMenu)
                 }
             }
         }
