@@ -54,7 +54,10 @@ val HawkAuth = createClientPlugin("HawkAuth", ::HawkAuthConfig) {
             request.method == HttpMethod.Get -> HawkPayload.None
             body is EmptyContent -> HawkPayload.None
             body is FormDataContent -> HawkPayload.Form(formPairs(body.formData))
+            // setBody(String) is still the raw String here; Ktor sends it as UTF-8, which is what gets hashed.
+            body is String -> HawkPayload.Json(body.encodeToByteArray())
             body is TextContent -> HawkPayload.Json(body.text.encodeToByteArray())
+            body is ByteArray -> HawkPayload.Json(body)
             else -> error(
                 "HawkAuthPlugin can't sign a ${body::class.simpleName} body (${request.method.value} $path)"
             )

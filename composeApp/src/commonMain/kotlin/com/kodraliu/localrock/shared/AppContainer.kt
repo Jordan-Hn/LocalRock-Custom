@@ -267,6 +267,9 @@ class AppContainer(
                 )
                 null
             }
+            // The server's name not resolving means no network (the phone is asleep, or the app is
+            // in the background and cut off), not an expired session: signing in again can't help.
+            error.isNameLookupFailure() -> null
             else -> {
                 println("[VacLocal] MQTT failed $attempt times (${error.message}) — re-authenticating")
                 // Live VacuumRepositories resolve their topics from userData on every poll, so a
@@ -460,4 +463,16 @@ class AppContainer(
         const val PROBE_LINK_RETRIES = 3
         const val PROBE_LINK_RETRY_DELAY_MS = 500L
     }
+}
+
+
+/** True when the failure is the server's hostname not resolving, anywhere in the cause chain. */
+private fun Throwable.isNameLookupFailure(): Boolean {
+    var e: Throwable? = this
+    while (e != null) {
+        if (e::class.simpleName == "UnknownHostException") return true
+        if (e.message?.contains("Unable to resolve host") == true) return true
+        e = e.cause
+    }
+    return false
 }

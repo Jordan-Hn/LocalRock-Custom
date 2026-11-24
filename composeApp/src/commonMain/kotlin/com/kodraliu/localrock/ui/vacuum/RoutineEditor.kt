@@ -130,13 +130,17 @@ internal fun RoutineEditorDialog(
     var choosingKind by remember { mutableStateOf(false) }
     val schedule = remember(initialDraft) { routineScheduleLabel(initialDraft) }
     val canSave = name.isNotBlank() && tasks.isNotEmpty()
+    // Back, the X and a tap outside all ask first once something has changed, so a routine isn't lost by accident.
+    val dirty = name != initialName || tasks != initialDraft.tasks
+    var confirmingDiscard by remember { mutableStateOf(false) }
+    val attemptClose = { if (dirty) confirmingDiscard = true else onDismiss() }
 
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+    Dialog(onDismissRequest = attemptClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Scaffold(
             topBar = {
                 CenterAlignedTopAppBar(
                     title = { Text(if (isNew) "New routine" else "Edit routine", fontWeight = FontWeight.SemiBold) },
-                    navigationIcon = { IconButton(onClick = onDismiss) { Icon(Icons.Default.Close, contentDescription = "Close") } },
+                    navigationIcon = { IconButton(onClick = attemptClose) { Icon(Icons.Default.Close, contentDescription = "Close") } },
                     actions = {
                         TextButton(onClick = { onSave(name.trim(), initialDraft.copy(tasks = tasks)) }, enabled = canSave) {
                             Text("Save", fontWeight = FontWeight.SemiBold)
@@ -189,6 +193,16 @@ internal fun RoutineEditorDialog(
                 }
                 Spacer(Modifier.navigationBarsPadding())
             }
+        }
+
+        if (confirmingDiscard) {
+            AlertDialog(
+                onDismissRequest = { confirmingDiscard = false },
+                title = { Text("Discard changes?") },
+                text = { Text(if (isNew) "This routine hasn't been saved." else "Your changes to this routine haven't been saved.") },
+                confirmButton = { TextButton(onClick = { confirmingDiscard = false; onDismiss() }) { Text("Discard", color = MaterialTheme.colorScheme.error) } },
+                dismissButton = { TextButton(onClick = { confirmingDiscard = false }) { Text("Keep editing") } },
+            )
         }
 
         if (choosingKind) {

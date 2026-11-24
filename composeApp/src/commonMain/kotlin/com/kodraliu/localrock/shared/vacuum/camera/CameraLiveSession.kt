@@ -122,7 +122,7 @@ class CameraLiveSession(private val session: VacuumSession) {
                     runCatching { session.resetHomesecPassword() }
                     val retry = session.setHomesecPassword(passwordMd5)
                     if (retry.error != null) {
-                        if (errorCode(retry.error) == ERR_PASSWORD_DISABLED) {
+                        if (errorCode(retry.error) in PASSWORD_DISABLED_CODES) {
                             throw IllegalStateException(PASSWORD_DISABLED_HINT)
                         }
                         throw IllegalStateException("Robot refused to set the PIN: ${retry.error}")
@@ -165,7 +165,7 @@ class CameraLiveSession(private val session: VacuumSession) {
         _state.value = State.Connecting("Checking PIN…")
         val check = session.checkHomesecPassword(passwordMd5)
         if (check.error != null) {
-            if (errorCode(check.error) == ERR_PASSWORD_DISABLED) {
+            if (errorCode(check.error) in PASSWORD_DISABLED_CODES) {
                 throw IllegalStateException(PASSWORD_DISABLED_HINT)
             }
             throw IllegalStateException("PIN check failed: ${check.error}")
@@ -314,8 +314,8 @@ class CameraLiveSession(private val session: VacuumSession) {
         const val CLIENT_ID = "7661636c6f63616c"
         val SignalingJson = Json { ignoreUnknownKeys = true; explicitNulls = false }
 
-        /** Robot error for "password is disable": the homesec feature is off on the device. */
-        const val ERR_PASSWORD_DISABLED = -1007
+        /** Robot error for "password is disable": remote viewing is off on the device. A226 firmware says -10007. */
+        val PASSWORD_DISABLED_CODES = setOf(-1007, -10007)
 
         /** Robot error for "camera status denied preview": the camera flag forbids streaming. */
         const val ERR_CAMERA_PREVIEW_DENIED = -10012
@@ -349,8 +349,8 @@ class CameraLiveSession(private val session: VacuumSession) {
         const val NO_CLIENT = "none"
 
         const val PASSWORD_DISABLED_HINT =
-            "This robot reports the camera PIN feature is disabled (-1007). Enable remote viewing " +
-                "for this vacuum once in the manufacturer's own app, then try again here."
+            "Live video isn't switched on for this robot yet, so there is no camera pattern to check. " +
+                "It needs the camera set up on your server first. Driving and pet search below still work."
 
         private fun errorCode(error: JsonObject?): Int? =
             error?.get("code")?.jsonPrimitive?.intOrNull

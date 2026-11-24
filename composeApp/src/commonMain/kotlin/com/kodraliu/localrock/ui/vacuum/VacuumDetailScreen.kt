@@ -2811,7 +2811,22 @@ private fun RoutineStrip(
             CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
         }
         is RoutinesState.Failed -> Text(state.reason, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-        is RoutinesState.Loaded -> androidx.compose.foundation.lazy.LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        is RoutinesState.Loaded -> Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            // New sits above the cards: at the end of the row it scrolled out of sight behind two routines.
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    if (state.routines.isEmpty()) "No routines yet" else "Tap a routine, then Start to run it",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = onNew) {
+                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp), tint = CleanAccent)
+                    Spacer(Modifier.width(4.dp))
+                    Text("New routine", color = CleanAccent, fontWeight = FontWeight.SemiBold)
+                }
+            }
+            androidx.compose.foundation.lazy.LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             items(state.routines.size, key = { state.routines[it].id }) { i ->
                 val scene = state.routines[i]
                 RoutineCard(
@@ -2823,18 +2838,6 @@ private fun RoutineStrip(
                     onDelete = { onDelete(scene) },
                 )
             }
-            item(key = "new") {
-                Surface(
-                    onClick = onNew,
-                    shape = RoundedCornerShape(18.dp),
-                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                    modifier = Modifier.width(96.dp).height(84.dp),
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-                        Icon(Icons.Default.Add, contentDescription = null, tint = CleanAccent)
-                        Text("New", style = MaterialTheme.typography.labelLarge, color = CleanAccent)
-                    }
-                }
             }
         }
     }
