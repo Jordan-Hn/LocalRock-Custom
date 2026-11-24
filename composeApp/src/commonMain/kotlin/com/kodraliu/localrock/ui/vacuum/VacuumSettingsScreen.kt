@@ -366,17 +366,8 @@ fun VacuumSettingsScreen(
 
 @Composable
 fun VacuumRemoteScreen(viewModel: VacuumViewModel, onBack: () -> Unit) {
-    val repository = viewModel.repository
-    val scope = rememberCoroutineScope()
-    LaunchedEffect(Unit) { runCatching { repository.startRemoteControl() } }
-    RemoteControlScreen(
-        onMove = { v, o -> scope.launch { runCatching { repository.moveRemote(v, o, 1500) } } },
-        onStop = { scope.launch { runCatching { repository.stopRemoteControl() } } },
-        onBack = {
-            scope.launch { runCatching { repository.stopRemoteControl() } }
-            onBack()
-        },
-    )
+    // Remote control lives in the remote view, with the live camera above the arrows.
+    CameraLiveViewScreen(viewModel = viewModel, onBack = onBack, initialTab = RemoteTab.DRIVE)
 }
 
 @Composable

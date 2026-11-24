@@ -71,12 +71,15 @@ internal class AndroidRtcPeer(iceServers: List<RtcIceServer>) : RtcPeer {
     }
 
     override suspend fun createOffer(): String {
-        pc.addTransceiver(
-            MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO,
-            RtpTransceiver.RtpTransceiverInit(RtpTransceiver.RtpTransceiverDirection.RECV_ONLY),
-        )
+        // Audio first and two-way, then video receive-only: the offer layout that streamed on an a226
+        // and a Curv 2 Flow (local_roborock_server camera docs). No microphone track is attached yet,
+        // so nothing is sent until talk is added.
         pc.addTransceiver(
             MediaStreamTrack.MediaType.MEDIA_TYPE_AUDIO,
+            RtpTransceiver.RtpTransceiverInit(RtpTransceiver.RtpTransceiverDirection.SEND_RECV),
+        )
+        pc.addTransceiver(
+            MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO,
             RtpTransceiver.RtpTransceiverInit(RtpTransceiver.RtpTransceiverDirection.RECV_ONLY),
         )
         val offer = suspendCoroutine<SessionDescription> { cont ->

@@ -469,6 +469,9 @@ class VacuumViewModel(
         repository.setHomeRooms(container.deviceRepository.home.value?.rooms ?: emptyList())
     }
 
+    /** The tab the remote view opens on; set just before navigating to it. */
+    var requestedRemoteTab: RemoteTab = RemoteTab.DRIVE
+
     fun loadRoutines() {
         viewModelScope.launch {
             _routines.value = RoutinesState.Loading

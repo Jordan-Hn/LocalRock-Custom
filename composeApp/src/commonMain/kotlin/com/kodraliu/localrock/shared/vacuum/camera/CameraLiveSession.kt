@@ -54,7 +54,8 @@ class CameraLiveSession(private val session: VacuumSession) {
         data object Idle : State
         data class Connecting(val stage: String) : State
         data object Streaming : State
-        data class Failed(val message: String) : State
+        /** [canEnable]: the robot refused because remote viewing is off, which an activation may fix. */
+        data class Failed(val message: String, val canEnable: Boolean = false) : State
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -75,12 +76,40 @@ class CameraLiveSession(private val session: VacuumSession) {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
-                _state.value = State.Failed(e.message ?: e::class.simpleName ?: "Unknown error")
+                _state.value = failure(e)
                 closePeer()
             }
         }
     }
 
+    /**
+     * Turns remote viewing on the way the official app did for an a226 (local_roborock_server #223):
+     * camera_status 385, then 417, then 4513, then the preview is retried. Bit 2, the authorization
+     * bit, is never written; the robot sets it itself once the sequence is accepted.
+     */
+    fun enableAndStart(pin: String) {
+        if (connectJob?.isActive == true) return
+        _state.value = State.Connecting("Enabling remote viewing…")
+        connectJob = scope.launch {
+            try {
+                for (status in ACTIVATION_SEQUENCE) {
+                    runCatching { session.setCameraStatus(status) }
+                    delay(800)
+                }
+                connect(pin)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                _state.value = failure(e)
+                closePeer()
+            }
+        }
+    }
+
+    private fun failure(e: Throwable) = State.Failed(
+        e.message ?: e::class.simpleName ?: "Unknown error",
+        canEnable = e is PreviewDeniedException,
+    )
 
     fun setPinAndStart(pin: String) {
         if (connectJob?.isActive == true) return
@@ -103,7 +132,7 @@ class CameraLiveSession(private val session: VacuumSession) {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
-                _state.value = State.Failed(e.message ?: e::class.simpleName ?: "Unknown error")
+                _state.value = failure(e)
                 closePeer()
             }
         }
@@ -163,11 +192,10 @@ class CameraLiveSession(private val session: VacuumSession) {
         if (startResp.error != null) {
             if (errorCode(startResp.error) == ERR_CAMERA_PREVIEW_DENIED) {
                 val status = runCatching { firstInt(session.getCameraStatus().result) }.getOrNull()
-                throw IllegalStateException(
-                    "Remote viewing is not enabled on this robot (-10012, camera_status=" +
-                        "${status ?: "unknown"}). It can only be switched on from the manufacturer's " +
-                        "own app while the robot is connected to the manufacturer's cloud, and the " +
-                        "setting is lost when the robot is moved back to a local server."
+                throw PreviewDeniedException(
+                    "Remote viewing is switched off on this robot (camera status ${status ?: "unknown"}). " +
+                        "Try enabling it below. If the robot still refuses, it has to be switched on once " +
+                        "from the official app while the robot is on Roborock's cloud."
                 )
             }
             if (errorCode(startResp.error) == ERR_TURN_SERVER_FAILED) throw IllegalStateException(TURN_SERVER_HINT)
@@ -190,6 +218,15 @@ class CameraLiveSession(private val session: VacuumSession) {
         _peer.value = peer
 
         coroutineScope {
+            val offerSdp = peer.createOffer()
+            val offerJson = buildJsonObject {
+                put("type", "offer")
+                put("sdp", offerSdp)
+            }
+            // The offer goes first and the candidates after it, the order that worked on the a226 and
+            // Curv 2 Flow; the peer replays candidates gathered meanwhile.
+            session.sendSdpToRobot(b64(offerJson))
+
             val localIceJob = launch {
                 peer.localCandidates.collect { c ->
                     val json = buildJsonObject {
@@ -200,13 +237,6 @@ class CameraLiveSession(private val session: VacuumSession) {
                     runCatching { session.sendIceToRobot(b64(json)) }
                 }
             }
-
-            val offerSdp = peer.createOffer()
-            val offerJson = buildJsonObject {
-                put("type", "offer")
-                put("sdp", offerSdp)
-            }
-            session.sendSdpToRobot(b64(offerJson))
 
             var answerSdp: String? = null
             var tries = 0
@@ -275,7 +305,12 @@ class CameraLiveSession(private val session: VacuumSession) {
     private fun b64(json: JsonElement): String =
         Base64.encode(SignalingJson.encodeToString(JsonElement.serializer(), json).encodeToByteArray())
 
+    private class PreviewDeniedException(message: String) : IllegalStateException(message)
+
     private companion object {
+        /** camera_status writes the official app made to switch remote viewing on (#223). */
+        val ACTIVATION_SEQUENCE = listOf(385, 417, 4513)
+
         const val CLIENT_ID = "7661636c6f63616c"
         val SignalingJson = Json { ignoreUnknownKeys = true; explicitNulls = false }
 

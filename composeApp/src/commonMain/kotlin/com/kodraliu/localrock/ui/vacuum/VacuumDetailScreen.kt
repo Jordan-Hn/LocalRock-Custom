@@ -82,6 +82,7 @@ import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.WaterDrop
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
@@ -368,12 +369,13 @@ fun VacuumDetailScreen(
             MoreAction.ROUTINES -> panel = DetailPanel.Routines
             MoreAction.ZONES -> { panel = null; onZoneClean() }
             MoreAction.PIN_GO -> { panel = null; onPinGo() }
-            MoreAction.REMOTE -> { panel = null; onRemote() }
+            MoreAction.REMOTE -> { panel = null; viewModel.requestedRemoteTab = RemoteTab.DRIVE; onCamera() }
             MoreAction.SCHEDULE -> { panel = null; onSchedule() }
-            MoreAction.CAMERA -> { panel = null; onCamera() }
+            MoreAction.CAMERA -> { panel = null; viewModel.requestedRemoteTab = RemoteTab.DRIVE; onCamera() }
             MoreAction.HISTORY -> { panel = null; onHistory() }
             MoreAction.EDIT_MAP -> { panel = null; onMapEdit() }
-            MoreAction.FIND_PET -> { panel = null; confirmFindPet = true }
+            // As in the official app, the pet search runs from the live view so it can be watched.
+            MoreAction.FIND_PET -> { panel = null; viewModel.requestedRemoteTab = RemoteTab.PET; onCamera() }
         }
     }
 
@@ -739,6 +741,9 @@ fun VacuumDetailScreen(
                     }
                 },
                 actions = {
+                    IconButton(onClick = { viewModel.requestedRemoteTab = RemoteTab.DRIVE; onCamera() }) {
+                        Icon(Icons.Default.Videocam, contentDescription = "Remote view")
+                    }
                     IconButton(onClick = { panel = DetailPanel.More }) {
                         Icon(Icons.Default.GridView, contentDescription = "More actions")
                     }

@@ -213,6 +213,7 @@ fun AppNavHost() {
                 CameraLiveViewScreen(
                     viewModel = viewModel,
                     onBack = { navController.popBackStack() },
+                    initialTab = viewModel.requestedRemoteTab,
                 )
             }
 
