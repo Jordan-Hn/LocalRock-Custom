@@ -15,6 +15,14 @@ import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.request.get
 import io.ktor.client.request.post
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.JsonNull
+import io.ktor.http.contentType
+import io.ktor.http.ContentType
+import io.ktor.client.request.setBody
+import io.ktor.client.request.delete
+import io.ktor.client.request.put
 import io.ktor.client.request.header
 import io.ktor.client.request.forms.submitForm
 import io.ktor.client.request.parameter
@@ -87,6 +95,58 @@ class DeviceApi(private val client: HttpClient) {
         val response: SceneRunResponse = resp.body()
         if (response.code != 200) throw DeviceApiException(response.code, response.msg)
         return response.result ?: response.data ?: SceneRunResult()
+    }
+
+    /** Saves a new routine in the official app's layout; returns it with the id the server gave it. */
+    suspend fun createScene(name: String, duid: String, homeId: Long?, param: JsonObject): Scene {
+        val body = buildJsonObject {
+            put("name", name)
+            put("enabled", true)
+            put("type", "WORKFLOW")
+            homeId?.let { put("homeId", it) }
+            put("deviceId", duid)
+            put("param", param)
+        }
+        val resp = client.post("/v2/user/scene") {
+            contentType(ContentType.Application.Json)
+            setBody(body.toString())
+        }
+        return resp.sceneWriteResult("save the routine")
+            ?.let { runCatching { ProdJson.decodeFromJsonElement<Scene>(it) }.getOrNull() }
+            ?: throw DeviceApiException(resp.status.value, "The server did not return the new routine")
+    }
+
+    /** Replaces a routine's steps. The param carries its triggers, so the schedule is kept. */
+    suspend fun updateSceneParam(sceneId: Long, param: JsonObject) {
+        val resp = client.put("/user/scene/$sceneId/param") {
+            contentType(ContentType.Application.Json)
+            setBody(buildJsonObject { put("param", param) }.toString())
+        }
+        resp.sceneWriteResult("update the routine")
+    }
+
+    suspend fun renameScene(sceneId: Long, name: String) {
+        val resp = client.put("/user/scene/$sceneId/name") {
+            contentType(ContentType.Application.Json)
+            setBody(buildJsonObject { put("name", name) }.toString())
+        }
+        resp.sceneWriteResult("rename the routine")
+    }
+
+    suspend fun deleteScene(sceneId: Long) {
+        client.delete("/user/scene/$sceneId").sceneWriteResult("delete the routine")
+    }
+
+    /** Checks a routine write went through; returns the reply's `result`/`data`, which may be null. */
+    private suspend fun HttpResponse.sceneWriteResult(action: String): JsonElement? {
+        if (!status.isSuccess()) throw DeviceApiException(status.value, "The server couldn't $action (HTTP ${status.value})")
+        val reply = runCatching { ProdJson.parseToJsonElement(bodyAsText()) as? JsonObject }.getOrNull()
+            ?: return null
+        val code = (reply["code"] as? JsonPrimitive)?.content?.toIntOrNull()
+        if (code != null && code != 200) {
+            throw DeviceApiException(code, (reply["msg"] as? JsonPrimitive)?.content ?: "The server couldn't $action")
+        }
+        return reply["result"]?.takeUnless { it is JsonNull } ?: reply["data"]?.takeUnless { it is JsonNull }
     }
 
     /** The robot's last-known state from the server, with its last map when [includeMap]. */

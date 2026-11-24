@@ -7,6 +7,9 @@ import com.kodraliu.localrock.shared.messages.MessageSeverity
 import com.kodraliu.localrock.shared.model.Scene
 import com.kodraliu.localrock.shared.model.SceneRunResult
 import com.kodraliu.localrock.shared.vacuum.AdvertisedFeature
+import com.kodraliu.localrock.shared.vacuum.RoutineDraft
+import com.kodraliu.localrock.shared.vacuum.buildRoutineParam
+import com.kodraliu.localrock.shared.http.currentEpochSeconds
 import com.kodraliu.localrock.shared.vacuum.BetaFeatureDef
 import com.kodraliu.localrock.shared.model.LastKnown
 import com.kodraliu.localrock.shared.vacuum.DockCapabilities
@@ -475,6 +478,32 @@ class VacuumViewModel(
                 RoutinesState.Failed(describe(e))
             }
         }
+    }
+
+    /**
+     * Saves [draft] as a new routine, or over [existing] (renaming it when [name] changed). The
+     * routine's own schedule triggers travel inside the draft, so an edit keeps them.
+     */
+    fun saveRoutine(existing: Scene?, name: String, draft: RoutineDraft, roomName: (Int) -> String) =
+        run(if (existing == null) "Routine “$name” created" else "Routine “$name” saved") {
+            val param = buildRoutineParam(draft, device.duid, roomName, currentEpochSeconds() * 1000)
+            if (existing == null) {
+                container.deviceRepository.createScene(device.duid, name, param)
+            } else {
+                container.deviceRepository.updateSceneParam(existing.id, param)
+                if (name != existing.name) container.deviceRepository.renameScene(existing.id, name)
+            }
+            loadRoutines()
+        }
+
+    fun renameRoutine(scene: Scene, name: String) = run("Routine renamed") {
+        container.deviceRepository.renameScene(scene.id, name)
+        loadRoutines()
+    }
+
+    fun deleteRoutine(scene: Scene) = run("Routine “${scene.name}” deleted") {
+        container.deviceRepository.deleteScene(scene.id)
+        loadRoutines()
     }
 
     /** The server runs the routine's steps itself; the robot's status shows how far it got. */

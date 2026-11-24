@@ -40,6 +40,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.BatteryUnknown
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Air
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Battery1Bar
@@ -170,6 +171,9 @@ import com.kodraliu.localrock.shared.vacuum.DockSettings
 import com.kodraliu.localrock.shared.vacuum.FloorMap
 import com.kodraliu.localrock.shared.vacuum.MopRoute
 import com.kodraliu.localrock.shared.vacuum.RoomCleanMode
+import com.kodraliu.localrock.shared.vacuum.RoutineDraft
+import com.kodraliu.localrock.shared.vacuum.parseRoutine
+import com.kodraliu.localrock.shared.vacuum.routineScheduleLabel
 import com.kodraliu.localrock.shared.vacuum.SWITCH_MAP_MODE_SMART
 import com.kodraliu.localrock.shared.vacuum.VacuumErrorCodes
 import com.kodraliu.localrock.shared.vacuum.VacuumFanPower
@@ -271,6 +275,12 @@ fun VacuumDetailScreen(
     var selectedRoomIds by remember { mutableStateOf(emptyList<Int>()) }
     // What Start cleans: the whole home, or the rooms picked on the map. Zone opens the zone screen.
     var cleanTarget by remember { mutableStateOf(CleanTarget.FULL) }
+    // Routine tab: the routine Start would run, the one open in the editor (null scene = new), and dialogs.
+    var selectedRoutine by remember { mutableStateOf<Scene?>(null) }
+    var routineEditor by remember { mutableStateOf<Pair<Scene?, RoutineDraft>?>(null) }
+    var renamingRoutine by remember { mutableStateOf<Scene?>(null) }
+    var deletingRoutine by remember { mutableStateOf<Scene?>(null) }
+    LaunchedEffect(cleanTarget) { if (cleanTarget == CleanTarget.ROUTINE) viewModel.loadRoutines() }
 
     var sessionRoomIds by remember { mutableStateOf(emptyList<Int>()) }
     var panel by remember { mutableStateOf<DetailPanel?>(null) }
@@ -597,7 +607,7 @@ fun VacuumDetailScreen(
             onTargetChange = { target ->
                 when (target) {
                     CleanTarget.ZONE -> onZoneClean()
-                    CleanTarget.FULL -> { cleanTarget = target; selectedRoomIds = emptyList() }
+                    CleanTarget.FULL, CleanTarget.ROUTINE -> { cleanTarget = target; selectedRoomIds = emptyList() }
                     CleanTarget.ROOM -> cleanTarget = target
                 }
             },
@@ -625,6 +635,62 @@ fun VacuumDetailScreen(
                 viewModel.run("Returning to dock") { it.dock() }
             },
             onCleaningMode = { panel = DetailPanel.CleaningMode },
+            routines = routines,
+            selectedRoutine = selectedRoutine,
+            onSelectRoutine = { selectedRoutine = if (selectedRoutine?.id == it.id) null else it },
+            onNewRoutine = { routineEditor = null to RoutineDraft(emptyList()) },
+            onEditRoutine = { routineEditor = it to parseRoutine(it.param) },
+            onRenameRoutine = { renamingRoutine = it },
+            onDeleteRoutine = { deletingRoutine = it },
+            onRunRoutine = { viewModel.runRoutine(it) },
+        )
+    }
+
+    val roomNameOf: (Int) -> String = { id -> parsedMap?.rooms?.firstOrNull { it.id == id }?.name ?: "Room $id" }
+    routineEditor?.let { (scene, draft) ->
+        RoutineEditorDialog(
+            initialName = scene?.name ?: "",
+            initialDraft = draft,
+            isNew = scene == null,
+            map = parsedMap,
+            currentMapFlag = currentFloorFlag,
+            supportsWaterSlide = supportsWaterSlide,
+            roomName = roomNameOf,
+            onSave = { name, edited ->
+                routineEditor = null
+                viewModel.saveRoutine(scene, name, edited, roomNameOf)
+            },
+            onDismiss = { routineEditor = null },
+        )
+    }
+    renamingRoutine?.let { scene ->
+        var newName by remember(scene) { mutableStateOf(scene.name) }
+        AlertDialog(
+            onDismissRequest = { renamingRoutine = null },
+            title = { Text("Rename routine") },
+            text = { OutlinedTextField(value = newName, onValueChange = { newName = it.take(40) }, singleLine = true) },
+            confirmButton = {
+                TextButton(enabled = newName.isNotBlank(), onClick = {
+                    renamingRoutine = null
+                    viewModel.renameRoutine(scene, newName.trim())
+                }) { Text("Rename") }
+            },
+            dismissButton = { TextButton(onClick = { renamingRoutine = null }) { Text("Cancel") } },
+        )
+    }
+    deletingRoutine?.let { scene ->
+        AlertDialog(
+            onDismissRequest = { deletingRoutine = null },
+            title = { Text("Delete “${scene.name}”?") },
+            text = { Text("The routine and its schedule are removed from your server. This can't be undone.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    deletingRoutine = null
+                    if (selectedRoutine?.id == scene.id) selectedRoutine = null
+                    viewModel.deleteRoutine(scene)
+                }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { deletingRoutine = null }) { Text("Cancel") } },
         )
     }
 
@@ -1024,7 +1090,7 @@ private val LABEL_PILL_FLAT = Color.White.copy(alpha = 0.8f)
 private val LABEL_PILL_3D = Color.Black.copy(alpha = 0.6f)
 
 @Composable
-private fun VacuumMapImage(
+internal fun VacuumMapImage(
     map: ParsedMap,
     selectedRoomIds: List<Int>,
     onRoomTap: (Int) -> Unit,
@@ -2631,7 +2697,105 @@ private fun stateTint(state: Int?): Color = when (state) {
 /** The accent for the main action and the chosen tab. */
 private val CleanAccent = AppColors.Brand
 
-internal enum class CleanTarget(val label: String) { FULL("Full"), ROOM("Room"), ZONE("Zone") }
+internal enum class CleanTarget(val label: String) { FULL("Full"), ROOM("Room"), ZONE("Zone"), ROUTINE("Routine") }
+
+/**
+ * Under the Routine tab: the robot's routines as cards, then a New card. Tapping a card picks it for
+ * Start; its menu edits, renames or deletes it.
+ */
+@Composable
+private fun RoutineStrip(
+    state: RoutinesState,
+    selected: Scene?,
+    onSelect: (Scene) -> Unit,
+    onNew: () -> Unit,
+    onEdit: (Scene) -> Unit,
+    onRename: (Scene) -> Unit,
+    onDelete: (Scene) -> Unit,
+) {
+    when (state) {
+        RoutinesState.Loading -> Box(Modifier.fillMaxWidth().height(84.dp), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+        }
+        is RoutinesState.Failed -> Text(state.reason, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+        is RoutinesState.Loaded -> androidx.compose.foundation.lazy.LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            items(state.routines.size, key = { state.routines[it].id }) { i ->
+                val scene = state.routines[i]
+                RoutineCard(
+                    scene = scene,
+                    selected = selected?.id == scene.id,
+                    onClick = { onSelect(scene) },
+                    onEdit = { onEdit(scene) },
+                    onRename = { onRename(scene) },
+                    onDelete = { onDelete(scene) },
+                )
+            }
+            item(key = "new") {
+                Surface(
+                    onClick = onNew,
+                    shape = RoundedCornerShape(18.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    modifier = Modifier.width(96.dp).height(84.dp),
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+                        Icon(Icons.Default.Add, contentDescription = null, tint = CleanAccent)
+                        Text("New", style = MaterialTheme.typography.labelLarge, color = CleanAccent)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RoutineCard(
+    scene: Scene,
+    selected: Boolean,
+    onClick: () -> Unit,
+    onEdit: () -> Unit,
+    onRename: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    val draft = remember(scene.param) { parseRoutine(scene.param) }
+    val schedule = remember(draft) { routineScheduleLabel(draft) }
+    var menu by remember { mutableStateOf(false) }
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(18.dp),
+        color = if (selected) CleanAccent.copy(alpha = 0.14f) else MaterialTheme.colorScheme.surfaceContainerHigh,
+        border = if (selected) BorderStroke(2.dp, CleanAccent) else null,
+        modifier = Modifier.width(168.dp).height(84.dp),
+    ) {
+        Row(Modifier.padding(start = 12.dp, top = 10.dp, bottom = 10.dp)) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.SpaceBetween) {
+                Text(scene.name, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(
+                    buildList {
+                        add(if (draft.tasks.size == 1) "1 task" else "${draft.tasks.size} tasks")
+                        schedule?.let { add("daily $it") }
+                    }.joinToString(" · "),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                )
+            }
+            Box {
+                IconButton(onClick = { menu = true }, modifier = Modifier.size(32.dp)) {
+                    Icon(Icons.Default.MoreHoriz, contentDescription = "Routine options", modifier = Modifier.size(18.dp))
+                }
+                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                    DropdownMenuItem(text = { Text("Edit") }, leadingIcon = { Icon(Icons.Default.Edit, null) }, onClick = { menu = false; onEdit() })
+                    DropdownMenuItem(text = { Text("Rename") }, onClick = { menu = false; onRename() })
+                    DropdownMenuItem(
+                        text = { Text("Delete", color = MaterialTheme.colorScheme.error) },
+                        leadingIcon = { Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error) },
+                        onClick = { menu = false; onDelete() },
+                    )
+                }
+            }
+        }
+    }
+}
 
 /** The map's tools stacked in one translucent rail, out of the way of the plan. */
 @Composable
@@ -2717,11 +2881,20 @@ private fun CleanPanel(
     onStop: () -> Unit,
     onDock: () -> Unit,
     onCleaningMode: () -> Unit,
+    routines: RoutinesState,
+    selectedRoutine: Scene?,
+    onSelectRoutine: (Scene) -> Unit,
+    onNewRoutine: () -> Unit,
+    onEditRoutine: (Scene) -> Unit,
+    onRenameRoutine: (Scene) -> Unit,
+    onDeleteRoutine: (Scene) -> Unit,
+    onRunRoutine: (Scene) -> Unit,
 ) {
     val isCleaning = status.state in ACTIVE_CLEANING_STATES
     val isPaused = status.state == VacuumStateCodes.PAUSED
     val active = isCleaning || isPaused
     val roomsPicked = selectedRoomNames.isNotEmpty()
+    val routineMode = target == CleanTarget.ROUTINE
 
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -2740,6 +2913,17 @@ private fun CleanPanel(
                 if (target == CleanTarget.ROOM) {
                     RoomSelectionLine(selectedRoomNames, onClear = onClearSelection)
                 }
+                if (routineMode) {
+                    RoutineStrip(
+                        state = routines,
+                        selected = selectedRoutine,
+                        onSelect = onSelectRoutine,
+                        onNew = onNewRoutine,
+                        onEdit = onEditRoutine,
+                        onRename = onRenameRoutine,
+                        onDelete = onDeleteRoutine,
+                    )
+                }
             }
 
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
@@ -2750,12 +2934,17 @@ private fun CleanPanel(
                         SideAction(Icons.Default.Tune, modeLabel(status), enabled = !busy, onClick = onCleaningMode)
                     }
                 }
-                val startEnabled = !busy && (active || target != CleanTarget.ROOM || roomsPicked)
+                val startEnabled = !busy && (active || when (target) {
+                    CleanTarget.ROOM -> roomsPicked
+                    CleanTarget.ROUTINE -> selectedRoutine != null
+                    else -> true
+                })
                 val (icon, label) = when {
                     isCleaning -> Icons.Default.Pause to "Pause"
                     isPaused -> Icons.Default.PlayArrow to "Resume"
                     target == CleanTarget.ROOM && roomsPicked ->
                         Icons.Default.PlayArrow to (if (selectedRoomNames.size == 1) "Clean 1 room" else "Clean ${selectedRoomNames.size} rooms")
+                    routineMode && selectedRoutine != null -> Icons.Default.PlayArrow to "Run routine"
                     else -> Icons.Default.PlayArrow to "Start"
                 }
                 StartButton(icon = icon, label = label, enabled = startEnabled) {
@@ -2763,6 +2952,7 @@ private fun CleanPanel(
                         isCleaning -> onPause()
                         isPaused -> onResume()
                         target == CleanTarget.ROOM -> onCleanRooms()
+                        routineMode -> selectedRoutine?.let(onRunRoutine)
                         else -> onClean()
                     }
                 }
