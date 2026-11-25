@@ -268,8 +268,20 @@ suspend fun VacuumSession.getMultiMapsList(): V1Response = sendCommand("get_mult
 suspend fun VacuumSession.checkHomesecPassword(passwordMd5Hex: String): V1Response =
     sendCommandRaw("check_homesec_password", JsonObject(mapOf("password" to JsonPrimitive(passwordMd5Hex))))
 
-suspend fun VacuumSession.setHomesecPassword(passwordMd5Hex: String): V1Response =
-    sendCommandRaw("set_homesec_password", JsonObject(mapOf("password" to JsonPrimitive(passwordMd5Hex))))
+/**
+ * Sets (and switches on) the camera PIN. Current firmware (a226, P20) takes
+ * {enable_password: 1, old_password, new_password} and refuses the bare {password} form with
+ * -10005 "no enable_password in params"; older firmware takes only {password}, so that is the fallback.
+ */
+suspend fun VacuumSession.setHomesecPassword(passwordMd5Hex: String, oldPasswordMd5Hex: String = ""): V1Response {
+    val current = sendCommandRaw("set_homesec_password", JsonObject(mapOf(
+        "enable_password" to JsonPrimitive(1),
+        "old_password" to JsonPrimitive(oldPasswordMd5Hex),
+        "new_password" to JsonPrimitive(passwordMd5Hex),
+    )))
+    if (current.error == null) return current
+    return sendCommandRaw("set_homesec_password", JsonObject(mapOf("password" to JsonPrimitive(passwordMd5Hex))))
+}
 
 suspend fun VacuumSession.resetHomesecPassword(): V1Response = sendCommand("reset_homesec_password")
 

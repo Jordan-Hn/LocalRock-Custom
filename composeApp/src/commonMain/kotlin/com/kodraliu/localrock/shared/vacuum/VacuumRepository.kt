@@ -1392,7 +1392,7 @@ class VacuumRepository(
         val ConsumableJson = Json { ignoreUnknownKeys = true; explicitNulls = false }
         const val MAP_FAST_POLL_MS = 8_000L
         /** Gap between map requests while the robot moves, so its marker follows it closely. */
-        const val MAP_LIVE_POLL_MS = 2_500L
+        const val MAP_LIVE_POLL_MS = 1_500L
         const val MAP_IDLE_POLL_MS = 60_000L
         const val MAP_RETRY_MS = 5_000L
         /** Map requests after a floor switch, [MAP_FAST_POLL_MS] apart: about a minute and a half. */

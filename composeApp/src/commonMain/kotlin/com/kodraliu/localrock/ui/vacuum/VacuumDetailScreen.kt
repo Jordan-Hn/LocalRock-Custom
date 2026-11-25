@@ -193,6 +193,7 @@ import com.kodraliu.localrock.shared.vacuum.roomCleanModesFor
 import com.kodraliu.localrock.shared.vacuum.washFrequencyLabel
 import com.kodraliu.localrock.shared.vacuum.map.ParsedMap
 import com.kodraliu.localrock.shared.vacuum.map.ParsedMapRoom
+import com.kodraliu.localrock.shared.vacuum.map.ParsedMapPoint
 import com.kodraliu.localrock.shared.vacuum.map.MapObstacle
 import com.kodraliu.localrock.shared.vacuum.modelSubtitle
 import com.kodraliu.localrock.shared.vacuum.map.roomAtNorm
@@ -1178,6 +1179,29 @@ internal fun VacuumMapImage(
     val currentMap by rememberUpdatedState(map)
     val currentBitmap by rememberUpdatedState(bitmap)
 
+    // The robot reports its position in steps; the marker glides between them, as the official app's
+    // does, instead of jumping every few seconds. It starts from wherever it's drawn right now.
+    val robotTarget = map.robotMm
+    var glideFrom by remember { mutableStateOf(robotTarget) }
+    var glideTo by remember { mutableStateOf(robotTarget) }
+    val glide = remember { androidx.compose.animation.core.Animatable(1f) }
+    // Each glide lasts as long as the gap before this position arrived, so the marker is still moving
+    // when the next one lands and never sits waiting.
+    var lastArrivalMs by remember { mutableStateOf(0L) }
+    val clock = remember { kotlin.time.TimeSource.Monotonic.markNow() }
+    LaunchedEffect(robotTarget) {
+        val now = clock.elapsedNow().inWholeMilliseconds
+        val gap = if (lastArrivalMs == 0L) ROBOT_GLIDE_MS.toLong() else now - lastArrivalMs
+        lastArrivalMs = now
+        glideFrom = glidePoint(glideFrom, glideTo, glide.value) ?: robotTarget
+        glideTo = robotTarget
+        glide.snapTo(0f)
+        glide.animateTo(
+            1f,
+            androidx.compose.animation.core.tween(gap.coerceIn(600L, 4_000L).toInt(), easing = androidx.compose.animation.core.LinearEasing),
+        )
+    }
+
     fun viewFor(width: Float, height: Float): MapView {
         // Fitted as if looking straight down, so the plan keeps its size as the camera is tilted
         // instead of shrinking and growing under the fingers.
@@ -1266,7 +1290,8 @@ internal fun VacuumMapImage(
             }
             drawFloorPlanStrokes(floorShapes, view, scale)
             drawMapLayer(overlayBitmap, view, 0f, quality)
-            drawRouteAndMarkers(map, view, scale, darkMap, faintRoute)
+            val robotNow = glidePoint(glideFrom, glideTo, glide.value)
+            drawRouteAndMarkers(if (robotNow != null && robotNow != map.robotMm) map.copy(robotMm = robotNow) else map, view, scale, darkMap, faintRoute)
             if (is3D && walls != null) {
                 val (wallSide, wallTop) = walls
                 // Walls rise by stacking the wall layer at climbing heights, then capping it with the
@@ -3079,7 +3104,8 @@ private fun CleanStatsRow(status: VacuumStatus, lastCleanArea: Long?, onClick: (
     val area = lastCleanArea?.let { mm2 -> (mm2 / 100_000).let { "${it / 10}.${it % 10}" } } ?: "—"
     val minutes = status.cleanTime?.takeIf { it > 0 }?.let { (it / 60).toString() } ?: "—"
     val battery = status.battery?.toString() ?: "—"
-    val charging = status.chargeStatus == 1 || status.state == VacuumStateCodes.CHARGING
+    // Some robots keep charge_status at 1 while out cleaning, so it only counts while on the dock.
+    val charging = status.state == VacuumStateCodes.CHARGING || (status.chargeStatus == 1 && isDocked(status.state))
     Surface(onClick = onClick, color = Color.Transparent, modifier = Modifier.fillMaxWidth()) {
         Row(Modifier.fillMaxWidth()) {
             StatColumn(area, "m²", "Cleaned area", Modifier.weight(1f))
@@ -3196,4 +3222,24 @@ private fun StartButton(icon: ImageVector, label: String, enabled: Boolean, onCl
         Spacer(Modifier.height(6.dp))
         Text(label, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold, maxLines = 1)
     }
+}
+
+
+/** How long the robot marker takes to glide to a newly reported position: about one map refresh. */
+private const val ROBOT_GLIDE_MS = 1_400
+
+/** The robot's drawn position [t] of the way from [from] to [to], turning the short way round. */
+internal fun glidePoint(from: ParsedMapPoint?, to: ParsedMapPoint?, t: Float): ParsedMapPoint? {
+    if (from == null || to == null || t >= 1f) return to
+    // A jump of more than about 1.5 m is a relocation (carried, or back on the dock): don't slide across the map.
+    val dx = (to.x - from.x).toLong(); val dy = (to.y - from.y).toLong()
+    if (dx * dx + dy * dy > 1_500L * 1_500L) return to
+    var turn = (to.angle - from.angle) % 360
+    if (turn > 180) turn -= 360
+    if (turn < -180) turn += 360
+    return to.copy(
+        x = from.x + ((to.x - from.x) * t).toInt(),
+        y = from.y + ((to.y - from.y) * t).toInt(),
+        angle = from.angle + (turn * t).toInt(),
+    )
 }
