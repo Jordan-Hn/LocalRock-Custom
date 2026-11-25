@@ -306,6 +306,13 @@ suspend fun VacuumSession.setCameraStatus(status: Int): V1Response =
 
 suspend fun VacuumSession.getTurnServer(): V1Response = sendCommand("get_turn_server")
 
+/** Two-way audio in a live view: [record] sends the robot's sound to the app, [play] plays the app's microphone on the robot. */
+suspend fun VacuumSession.startVoiceChat(record: Boolean, play: Boolean): V1Response =
+    sendCommandRaw("start_voice_chat", JsonObject(mapOf("record" to JsonPrimitive(record), "play" to JsonPrimitive(play))))
+
+suspend fun VacuumSession.setVoiceChatVolume(volume: Int): V1Response =
+    sendCommandRaw("set_voice_chat_volume", JsonObject(mapOf("volume" to JsonPrimitive(volume))))
+
 suspend fun VacuumSession.sendSdpToRobot(appSdpBase64: String): V1Response =
     sendCommandRaw("send_sdp_to_robot", JsonObject(mapOf("app_sdp" to JsonPrimitive(appSdpBase64))))
 

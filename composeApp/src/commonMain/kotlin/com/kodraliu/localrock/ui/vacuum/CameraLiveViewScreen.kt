@@ -27,6 +27,8 @@ import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material.icons.filled.Pets
 import androidx.compose.material.icons.filled.VideocamOff
 import androidx.compose.material3.Button
@@ -71,6 +73,7 @@ import com.kodraliu.localrock.shared.webrtc.RtcVideoView
 import com.kodraliu.localrock.shared.webrtc.liveViewSupported
 import com.kodraliu.localrock.ui.AppColors
 import com.kodraliu.localrock.ui.LocalAppContainer
+import com.kodraliu.localrock.ui.rememberMicrophonePermissionRequest
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -100,6 +103,11 @@ fun CameraLiveViewScreen(
     val liveSession = remember { CameraLiveSession(viewModel.repository.session) }
     val state by liveSession.state.collectAsState()
     val peer by liveSession.peer.collectAsState()
+    val micOn by liveSession.micOn.collectAsState()
+    val askMic = rememberMicrophonePermissionRequest { granted ->
+        if (granted) liveSession.setMicrophone(true)
+        else container.messages.error("Allow the microphone to talk through the robot")
+    }
     val status by repository.status.collectAsState()
     var tab by remember { mutableStateOf(initialTab) }
     var pin by remember { mutableStateOf(container.appSettings.cameraPin(duid) ?: "") }
@@ -155,6 +163,8 @@ fun CameraLiveViewScreen(
                         pin = ""
                         liveSession.stop()
                     },
+                    micOn = micOn,
+                    onToggleMic = { if (micOn) liveSession.setMicrophone(false) else askMic() },
                 )
             }
 
@@ -217,6 +227,8 @@ private fun VideoArea(
     onRetry: () -> Unit,
     onEnable: () -> Unit,
     onChangePin: () -> Unit,
+    micOn: Boolean,
+    onToggleMic: () -> Unit,
 ) {
     if (!liveViewSupported) {
         CameraMessage("Live video isn't available on this platform yet. You can still drive below.")
@@ -256,6 +268,21 @@ private fun VideoArea(
         }
         is CameraLiveSession.State.Streaming -> Box(Modifier.fillMaxSize()) {
             peer?.let { RtcVideoView(it, Modifier.fillMaxSize()) }
+            // Talk through the robot: off by default, the robot's own sound plays either way.
+            Surface(
+                onClick = onToggleMic,
+                shape = CircleShape,
+                color = if (micOn) AppColors.Brand else Color.Black.copy(alpha = 0.55f),
+                contentColor = Color.White,
+                modifier = Modifier.align(Alignment.BottomEnd).padding(12.dp).size(52.dp),
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        if (micOn) Icons.Filled.Mic else Icons.Filled.MicOff,
+                        contentDescription = if (micOn) "Stop talking through the robot" else "Talk through the robot",
+                    )
+                }
+            }
             Text(
                 "LIVE",
                 modifier = Modifier

@@ -1,6 +1,21 @@
 package com.kodraliu.localrock.ui.vacuum
 
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.rememberTransformableState
+import androidx.compose.foundation.gestures.transformable
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -101,6 +116,7 @@ private val OBSTACLE_FILL = Color(0xFF2A7F86)
 internal fun ObstacleSheetContent(obstacle: MapObstacle, loadPhoto: suspend (String) -> ObstaclePhotoData) {
     var photo by remember(obstacle) { mutableStateOf<Pair<ImageBitmap, PhotoBox?>?>(null) }
     var failure by remember(obstacle) { mutableStateOf<String?>(null) }
+    var fullScreen by remember(obstacle) { mutableStateOf(false) }
     LaunchedEffect(obstacle) {
         val id = obstacle.photoId ?: return@LaunchedEffect
         runCatching { loadPhoto(id).let { it.image.decodeToImageBitmap() to it.box } }
@@ -144,12 +160,14 @@ internal fun ObstacleSheetContent(obstacle: MapObstacle, loadPhoto: suspend (Str
                     modifier = frame.aspectRatio(bitmap.width.toFloat() / bitmap.height, matchHeightConstraintsFirst = true)
                         .align(Alignment.CenterHorizontally)
                         .clip(MaterialTheme.shapes.large)
+                        .clickable { fullScreen = true }
                         .drawWithContent {
                             drawContent()
                             if (box != null) drawBoxCorners(box, bitmap.width, bitmap.height, boxColor)
                         },
                     contentScale = ContentScale.Fit,
                 )
+                if (fullScreen) FullScreenPhoto(bitmap) { fullScreen = false }
             }
             failure != null -> Text(
                 "Couldn't load the photo: $failure",
@@ -158,6 +176,42 @@ internal fun ObstacleSheetContent(obstacle: MapObstacle, loadPhoto: suspend (Str
             )
             else -> Box(frame.aspectRatio(4f / 3f).align(Alignment.CenterHorizontally), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator()
+            }
+        }
+    }
+}
+
+/** The photo on its own, edge to edge with no box over it: pinch to zoom, double tap to reset, tap or X to close. */
+@Composable
+private fun FullScreenPhoto(bitmap: ImageBitmap, onClose: () -> Unit) {
+    Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        var scale by remember { mutableStateOf(1f) }
+        var offset by remember { mutableStateOf(Offset.Zero) }
+        val zoom = rememberTransformableState { z, pan, _ ->
+            scale = (scale * z).coerceIn(1f, 5f)
+            offset = if (scale == 1f) Offset.Zero else offset + pan
+        }
+        Box(
+            Modifier.fillMaxSize().background(Color.Black)
+                .pointerInput(Unit) {
+                    detectTapGestures(
+                        onTap = { if (scale == 1f) onClose() },
+                        onDoubleTap = { scale = 1f; offset = Offset.Zero },
+                    )
+                }
+                .transformable(zoom),
+            contentAlignment = Alignment.Center,
+        ) {
+            Image(
+                bitmap = bitmap,
+                contentDescription = "Obstacle photo, full screen",
+                modifier = Modifier.fillMaxSize().graphicsLayer {
+                    scaleX = scale; scaleY = scale; translationX = offset.x; translationY = offset.y
+                },
+                contentScale = ContentScale.Fit,
+            )
+            IconButton(onClick = onClose, modifier = Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(8.dp)) {
+                Icon(Icons.Filled.Close, contentDescription = "Close", tint = Color.White)
             }
         }
     }

@@ -25,6 +25,8 @@ interface RtcPeer {
     suspend fun createOffer(): String
     suspend fun setRemoteAnswer(sdp: String)
     fun addRemoteCandidate(candidate: RtcIceCandidate)
+    /** Sends the phone's microphone to the robot while [enabled]; does nothing where there is no microphone support. */
+    fun setMicrophoneEnabled(enabled: Boolean) {}
     fun close()
 }
 

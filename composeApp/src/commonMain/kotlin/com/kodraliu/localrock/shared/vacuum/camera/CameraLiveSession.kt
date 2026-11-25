@@ -10,6 +10,8 @@ import com.kodraliu.localrock.shared.vacuum.getTurnServer
 import com.kodraliu.localrock.shared.vacuum.resetHomesecPassword
 import com.kodraliu.localrock.shared.vacuum.sendIceToRobot
 import com.kodraliu.localrock.shared.vacuum.setCameraStatus
+import com.kodraliu.localrock.shared.vacuum.setVoiceChatVolume
+import com.kodraliu.localrock.shared.vacuum.startVoiceChat
 import com.kodraliu.localrock.shared.vacuum.setHomesecPassword
 import com.kodraliu.localrock.shared.vacuum.sendSdpToRobot
 import com.kodraliu.localrock.shared.vacuum.startCameraPreview
@@ -67,6 +69,16 @@ class CameraLiveSession(private val session: VacuumSession) {
     private val _peer = MutableStateFlow<RtcPeer?>(null)
     val peer: StateFlow<RtcPeer?> = _peer
 
+    private val _micOn = MutableStateFlow(false)
+    val micOn: StateFlow<Boolean> = _micOn
+
+    /** Turns talking through the robot on or off. The robot's own sound plays from the start. */
+    fun setMicrophone(on: Boolean) {
+        val p = _peer.value ?: return
+        p.setMicrophoneEnabled(on)
+        _micOn.value = on
+    }
+
     fun start(pin: String) {
         if (connectJob?.isActive == true) return
         _state.value = State.Connecting("Preparing…")
@@ -96,7 +108,9 @@ class CameraLiveSession(private val session: VacuumSession) {
                     runCatching { session.setCameraStatus(status) }
                     delay(800)
                 }
-                connect(pin)
+                // The robot now asks for its Power button to be pressed. Until it is, the preview is
+                // refused, so keep asking instead of failing on the first refusal.
+                connect(pin, buttonWaitMs = BUTTON_WAIT_MS)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
@@ -155,11 +169,12 @@ class CameraLiveSession(private val session: VacuumSession) {
     }
 
     private fun closePeer() {
+        _micOn.value = false
         _peer.value?.close()
         _peer.value = null
     }
 
-    private suspend fun connect(pin: String) {
+    private suspend fun connect(pin: String, buttonWaitMs: Long = 0) {
         val passwordMd5 = md5Hex(pin)
 
         _state.value = State.Connecting("Checking PIN…")
@@ -188,7 +203,15 @@ class CameraLiveSession(private val session: VacuumSession) {
         }
 
         _state.value = State.Connecting("Starting camera…")
-        val startResp = session.startCameraPreview(CLIENT_ID, passwordMd5)
+        var startResp = session.startCameraPreview(CLIENT_ID, passwordMd5)
+        var waited = 0L
+        while (startResp.error != null && errorCode(startResp.error) == ERR_CAMERA_PREVIEW_DENIED && waited < buttonWaitMs) {
+            val left = (buttonWaitMs - waited) / 1_000
+            _state.value = State.Connecting("Press the power button on the robot now (${left}s)")
+            delay(2_000)
+            waited += 2_000
+            startResp = session.startCameraPreview(CLIENT_ID, passwordMd5)
+        }
         if (startResp.error != null) {
             if (errorCode(startResp.error) == ERR_CAMERA_PREVIEW_DENIED) {
                 val status = runCatching { firstInt(session.getCameraStatus().result) }.getOrNull()
@@ -229,10 +252,13 @@ class CameraLiveSession(private val session: VacuumSession) {
 
             val localIceJob = launch {
                 peer.localCandidates.collect { c ->
+                    // go2rtc sends only RTP (component 1) candidates, each labelled mid "0" / index 0;
+                    // the robot pairs them with the first media section whatever their own labels.
+                    if (c.candidate.split(" ").getOrNull(1) == "2") return@collect
                     val json = buildJsonObject {
                         put("candidate", c.candidate)
-                        put("sdpMLineIndex", c.sdpMLineIndex)
-                        put("sdpMid", c.sdpMid ?: "0")
+                        put("sdpMLineIndex", 0)
+                        put("sdpMid", "0")
                     }
                     runCatching { session.sendIceToRobot(b64(json)) }
                 }
@@ -240,7 +266,7 @@ class CameraLiveSession(private val session: VacuumSession) {
 
             var answerSdp: String? = null
             var tries = 0
-            while (answerSdp == null && tries < 15) {
+            while (answerSdp == null && tries < 30) {
                 val devSdp = firstObject(runCatching { session.getDeviceSdp() }.getOrNull()?.result)
                     ?.get("dev_sdp")?.jsonPrimitive?.contentOrNull
                 if (!devSdp.isNullOrBlank() && devSdp != "retry") {
@@ -291,6 +317,11 @@ class CameraLiveSession(private val session: VacuumSession) {
                         _state.value = State.Streaming
                         localIceJob.cancel()
                         remoteIceJob.cancel()
+                        // go2rtc starts the robot's two-way audio once media flows, at volume 80.
+                        launch {
+                            runCatching { session.startVoiceChat(record = true, play = true) }
+                            runCatching { session.setVoiceChatVolume(80) }
+                        }
                     }
                     RtcConnectionState.FAILED ->
                         throw IllegalStateException("Video connection failed")
@@ -310,6 +341,9 @@ class CameraLiveSession(private val session: VacuumSession) {
     private companion object {
         /** camera_status writes the official app made to switch remote viewing on (#223). */
         val ACTIVATION_SEQUENCE = listOf(385, 417, 4513)
+
+        /** How long to keep retrying the preview while the robot waits for its Power button. */
+        const val BUTTON_WAIT_MS = 90_000L
 
         const val CLIENT_ID = "7661636c6f63616c"
         val SignalingJson = Json { ignoreUnknownKeys = true; explicitNulls = false }
