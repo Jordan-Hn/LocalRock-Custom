@@ -96,16 +96,20 @@ class CameraLiveSession(private val session: VacuumSession) {
 
     /**
      * Turns remote viewing on the way the official app did for an a226 (local_roborock_server #223):
-     * camera_status 385, then 417, then 4513, then the preview is retried. Bit 2, the authorization
-     * bit, is never written; the robot sets it itself once the sequence is accepted.
+     * from 257 it wrote 385, then 417, then 4513. Those are flags added to whatever the robot already
+     * has (0x80, 0x20, 0x1000), not values to write outright: the other bits hold settings such as
+     * obstacle photos, and overwriting them on 2026-11-25 turned the photos off ("not support").
+     * Bit 2, the authorization bit, is never written; the robot sets it itself once Power is pressed.
      */
     fun enableAndStart(pin: String) {
         if (connectJob?.isActive == true) return
         _state.value = State.Connecting("Enabling remote viewing…")
         connectJob = scope.launch {
             try {
-                for (status in ACTIVATION_SEQUENCE) {
-                    runCatching { session.setCameraStatus(status) }
+                val current = runCatching { firstInt(session.getCameraStatus().result) }.getOrNull() ?: BASE_CAMERA_STATUS
+                val base = current and CAMERA_AUTH_BIT.inv()
+                for (flags in ACTIVATION_FLAGS) {
+                    runCatching { session.setCameraStatus(base or flags) }
                     delay(800)
                 }
                 // The robot now asks for its Power button to be pressed. Until it is, the preview is
@@ -339,8 +343,14 @@ class CameraLiveSession(private val session: VacuumSession) {
     private class PreviewDeniedException(message: String) : IllegalStateException(message)
 
     private companion object {
-        /** camera_status writes the official app made to switch remote viewing on (#223). */
-        val ACTIVATION_SEQUENCE = listOf(385, 417, 4513)
+        /** Flags the official app added, step by step, to switch remote viewing on (#223: 257 -> 385 -> 417 -> 4513). */
+        val ACTIVATION_FLAGS = listOf(0x80, 0xA0, 0x10A0)
+
+        /** The a226's camera_status with nothing switched on, used if the robot can't be asked. */
+        const val BASE_CAMERA_STATUS = 257
+
+        /** Set by the robot once activation is confirmed with its Power button; writes containing it are refused. */
+        const val CAMERA_AUTH_BIT = 0x4
 
         /** How long to keep retrying the preview while the robot waits for its Power button. */
         const val BUTTON_WAIT_MS = 90_000L
