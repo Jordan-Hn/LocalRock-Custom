@@ -19,6 +19,8 @@ fun initVacLocalAndroidContext(context: Context) {
 
 fun appContextOrNull(): Context? = appContext
 
+actual fun appDataDir(): String? = appContext?.filesDir?.absolutePath
+
 actual fun saveDebugBlob(name: String, bytes: ByteArray): String? {
     val ctx = appContext ?: return null
     val dir = ctx.getExternalFilesDir(null) ?: ctx.filesDir

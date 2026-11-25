@@ -735,7 +735,8 @@ fun VacuumDetailScreen(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
-                        val (headline, headlineColor) = statusHeadline(status)
+                        val dryingNow = rememberDryingActive(status)
+                        val (headline, headlineColor) = statusHeadline(status, dryingNow)
                         Text(
                             headline,
                             style = MaterialTheme.typography.labelMedium,
@@ -2966,11 +2967,40 @@ private fun MapToolRail(
     }
 }
 
+/**
+ * Whether the mop is really drying. The robot's state 27 says so outright; dry_status 1 on its own is
+ * trusted only while the remaining time (rdt) counts down. The a226 was seen on 2026-11-26 keeping
+ * dry_status 1 with rdt frozen at 6188 s for hours after drying had been cancelled, while charging.
+ */
+@Composable
+private fun rememberDryingActive(status: VacuumStatus): Boolean {
+    if (status.state == VacuumStateCodes.DRYING_MOP) return true
+    val rdt = status.remainingDryTimeSec
+    var lastRdt by remember { mutableStateOf<Long?>(null) }
+    var changedAt by remember { mutableStateOf(kotlin.time.TimeSource.Monotonic.markNow()) }
+    var moving by remember { mutableStateOf(false) }
+    if (rdt != lastRdt) {
+        // A new value after an earlier one means the countdown is running.
+        moving = lastRdt != null && rdt != null
+        lastRdt = rdt
+        changedAt = kotlin.time.TimeSource.Monotonic.markNow()
+    }
+    // The countdown steps at least once a minute while drying; give it a little longer before calling it stuck.
+    var now by remember { mutableStateOf(kotlin.time.TimeSource.Monotonic.markNow()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            kotlinx.coroutines.delay(15_000)
+            now = kotlin.time.TimeSource.Monotonic.markNow()
+        }
+    }
+    val stuck = now > changedAt && changedAt.elapsedNow().inWholeSeconds > 150
+    return status.dryStatus == 1 && moving && !stuck
+}
+
 /** What the robot is doing, for the line under its name: its own error first, then drying, then its state. */
 @Composable
-private fun statusHeadline(status: VacuumStatus): Pair<String, Color> {
+private fun statusHeadline(status: VacuumStatus, drying: Boolean): Pair<String, Color> {
     val errorCode = status.errorCode ?: 0
-    val drying = status.dryStatus == 1 || status.state == VacuumStateCodes.DRYING_MOP
     return when {
         errorCode != 0 -> VacuumErrorCodes.describe(errorCode) to MaterialTheme.colorScheme.error
         drying -> dryingLabel(status.remainingDryTimeSec) to MaterialTheme.colorScheme.tertiary

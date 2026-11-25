@@ -483,6 +483,7 @@ class VacuumRepository(
             parseCleanRecord(result, id)?.let { records += it }
         }
         _cleanHistory.value = records
+        prefetchRunPhotos(records)
     }
 
 
@@ -1332,11 +1333,59 @@ class VacuumRepository(
 
     private val photoMutex = Mutex()
     private val obstaclePhotos = mutableMapOf<String, ObstaclePhotoData>()
+    private val photoStore by lazy { ObstaclePhotoStore(com.kodraliu.localrock.shared.protocol.appDataDir()) }
 
-    /** The photo the robot keeps for an obstacle on the map (#36), fetched once per photo id. */
+    /**
+     * The photo the robot keeps for an obstacle on the map (#36), fetched once per photo id. Every
+     * photo is also saved on the phone, so it outlives the robot's copy.
+     */
     suspend fun fetchObstaclePhoto(photoId: String): ObstaclePhotoData = photoMutex.withLock {
         obstaclePhotos[photoId]
-            ?: session.fetchPhoto(createSecurityData(rriotKeyProvider()), photoId).also { obstaclePhotos[photoId] = it }
+            ?: photoStore.get(photoId)?.also { obstaclePhotos[photoId] = it }
+            ?: session.fetchPhoto(createSecurityData(rriotKeyProvider()), photoId).also {
+                obstaclePhotos[photoId] = it
+                photoStore.put(photoId, it)
+            }
+    }
+
+    /** One obstacle photo of a run: its type, and the photo when it could be had (from the phone or the robot). */
+    class RunPhoto(val photoId: String, val type: Int?, val photo: ObstaclePhotoData?)
+
+    /**
+     * The obstacle photos of the run that began at [record]'s start. The run's map names them; each
+     * comes from the phone if saved, else from the robot, and the set is recorded so it stays
+     * available once the robot has replaced them. When the map can't be had any more, what was saved
+     * is shown.
+     */
+    suspend fun fetchRunPhotos(record: CleanRecord): List<RunPhoto> {
+        val fromMap = runCatching { fetchCleanRecordMap(record.beginEpoch) }.getOrNull()
+            ?.obstacles?.filter { it.photoId != null }?.distinctBy { it.photoId }
+            ?.map { ObstaclePhotoStore.Entry(it.photoId!!, it.type) }
+        val entries = fromMap ?: photoStore.runPhotos(record.beginEpoch) ?: return emptyList()
+        val photos = entries.map { e -> RunPhoto(e.photoId, e.type, runCatching { fetchObstaclePhoto(e.photoId) }.getOrNull()) }
+        // Only what was actually saved is recorded, so a later visit can still try the rest.
+        val saved = photos.filter { it.photo != null }.map { ObstaclePhotoStore.Entry(it.photoId, it.type) }
+        if (saved.isNotEmpty() || fromMap != null) {
+            val before = photoStore.runPhotos(record.beginEpoch).orEmpty()
+            photoStore.saveRun(record.beginEpoch, (before + saved).distinctBy { it.photoId })
+        }
+        return photos
+    }
+
+    private var photoPrefetch: kotlinx.coroutines.Job? = null
+
+    /**
+     * Saves the photos of the newest runs that aren't saved yet, while the robot still has them, then
+     * drops the photos of runs past [KEPT_PHOTO_RUNS]. Runs in the background after the history loads.
+     */
+    private fun prefetchRunPhotos(records: List<CleanRecord>) {
+        if (photoPrefetch?.isActive == true) return
+        photoPrefetch = scope.launch {
+            records.sortedByDescending { it.beginEpoch }.take(PREFETCH_PHOTO_RUNS)
+                .filter { !photoStore.hasRun(it.beginEpoch) }
+                .forEach { runCatching { fetchRunPhotos(it) } }
+            runCatching { photoStore.prune(KEPT_PHOTO_RUNS) }
+        }
     }
 
     private val patrolThumbnails = mutableMapOf<Triple<Long, Int, Int>, List<PatrolThumbnail>>()
@@ -1398,6 +1447,10 @@ class VacuumRepository(
         /** Map requests after a floor switch, [MAP_FAST_POLL_MS] apart: about a minute and a half. */
         const val FLOOR_SWITCH_MAP_REFRESHES = 12
         const val MAX_HISTORY_RECORDS = 20
+        /** Runs whose obstacle photos stay saved on the phone; older runs' photos are deleted. */
+        const val KEPT_PHOTO_RUNS = 20
+        /** Newest runs whose photos are saved in the background after the history loads. */
+        const val PREFETCH_PHOTO_RUNS = 5
         const val MAX_TIMELINE_PAGES = 20
 
         const val READBACK_ATTEMPTS = 4

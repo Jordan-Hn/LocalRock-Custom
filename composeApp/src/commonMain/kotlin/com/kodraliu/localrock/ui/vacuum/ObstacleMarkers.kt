@@ -183,7 +183,7 @@ internal fun ObstacleSheetContent(obstacle: MapObstacle, loadPhoto: suspend (Str
 
 /** The photo on its own, edge to edge with no box over it: pinch to zoom, double tap to reset, tap or X to close. */
 @Composable
-private fun FullScreenPhoto(bitmap: ImageBitmap, onClose: () -> Unit) {
+internal fun FullScreenPhoto(bitmap: ImageBitmap, onClose: () -> Unit) {
     Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         var scale by remember { mutableStateOf(1f) }
         var offset by remember { mutableStateOf(Offset.Zero) }
@@ -235,4 +235,42 @@ private fun DrawScope.drawBoxCorners(box: PhotoBox, imageWidth: Int, imageHeight
         drawLine(color, Offset(x, y), Offset(x + dx * arm, y), stroke * 1.5f)
         drawLine(color, Offset(x, y), Offset(x, y + dy * arm), stroke * 1.5f)
     }
+}
+
+/**
+ * A run's obstacle photos in rows of three, each with its obstacle name; a tap opens it full screen.
+ * A photo neither the phone nor the robot still has shows as a grey tile.
+ */
+@Composable
+internal fun RunPhotoGrid(photos: List<com.kodraliu.localrock.shared.vacuum.VacuumRepository.RunPhoto>) {
+    var open by remember { mutableStateOf<ImageBitmap?>(null) }
+    val decoded = remember(photos) {
+        photos.map { p -> p to p.photo?.let { runCatching { it.image.decodeToImageBitmap() }.getOrNull() } }
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        decoded.chunked(3).forEach { row ->
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                row.forEach { (p, bitmap) ->
+                    Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Box(
+                            Modifier.fillMaxWidth().aspectRatio(4f / 3f).clip(MaterialTheme.shapes.medium)
+                                .background(MaterialTheme.colorScheme.surfaceContainerHighest)
+                                .then(if (bitmap != null) Modifier.clickable { open = bitmap } else Modifier),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            if (bitmap != null) {
+                                Image(bitmap, contentDescription = obstacleType(p.type).name, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                            } else {
+                                Text("Not kept", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                        Spacer(Modifier.height(4.dp))
+                        Text(obstacleType(p.type).name, style = MaterialTheme.typography.labelSmall, maxLines = 1, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+                repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
+            }
+        }
+    }
+    open?.let { FullScreenPhoto(it) { open = null } }
 }

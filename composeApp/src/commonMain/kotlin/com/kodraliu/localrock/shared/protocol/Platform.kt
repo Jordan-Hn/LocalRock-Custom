@@ -10,6 +10,9 @@ internal expect fun secureRandomBytes(size: Int): ByteArray
 
 expect fun saveDebugBlob(name: String, bytes: ByteArray): String?
 
+/** A folder private to the app for files it keeps between launches, or null before the platform is ready. */
+expect fun appDataDir(): String?
+
 internal fun gunzip(data: ByteArray): ByteArray {
     val src = Buffer().apply { write(data) }
     return GzipSource(src).buffer().readByteArray()

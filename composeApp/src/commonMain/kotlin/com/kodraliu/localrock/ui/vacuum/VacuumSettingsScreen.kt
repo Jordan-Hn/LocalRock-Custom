@@ -111,6 +111,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import com.kodraliu.localrock.shared.vacuum.VacuumRepository
 import com.kodraliu.localrock.shared.vacuum.AdvertisedFeature
 import com.kodraliu.localrock.shared.vacuum.BetaFeatureState
 import com.kodraliu.localrock.shared.vacuum.FeatureChoice
@@ -359,6 +360,7 @@ fun VacuumSettingsScreen(
                 records = cleanHistory,
                 summary = cleanSummary,
                 loadMap = { repository.fetchCleanRecordMap(it) },
+                loadPhotos = repository::fetchRunPhotos,
                 loadThumbnails = { task, x, y -> repository.fetchPatrolThumbnails(task, x, y) },
                 mapRotation = mapRotation,
                 loadTimeline = repository::fetchCleanTimeline,
@@ -416,6 +418,7 @@ fun VacuumHistoryScreen(viewModel: VacuumViewModel, onBack: () -> Unit) {
         records = cleanHistory,
         summary = cleanSummary,
         loadMap = { repository.fetchCleanRecordMap(it) },
+        loadPhotos = repository::fetchRunPhotos,
         loadThumbnails = { task, x, y -> repository.fetchPatrolThumbnails(task, x, y) },
         mapRotation = mapRotation,
         loadTimeline = repository::fetchCleanTimeline,
@@ -918,6 +921,7 @@ private fun HistoryScreen(
     records: List<CleanRecord>,
     summary: CleanSummary?,
     loadMap: suspend (beginEpoch: Long) -> ParsedMap,
+    loadPhotos: suspend (CleanRecord) -> List<VacuumRepository.RunPhoto>,
     loadThumbnails: suspend (taskId: Long, x: Int, y: Int) -> List<PatrolThumbnail>,
     mapRotation: Int,
     loadTimeline: suspend (CleanRecord) -> List<CleanTimelineStep>?,
@@ -957,7 +961,7 @@ private fun HistoryScreen(
                 if (open.isCruise) {
                     CruiseRecordDetail(open, loadMap, loadThumbnails, mapRotation, Modifier.padding(padding))
                 } else {
-                    CleanRecordDetail(open, loadMap, loadTimeline, roomName, mapRotation, Modifier.padding(padding))
+                    CleanRecordDetail(open, loadMap, loadPhotos, loadTimeline, roomName, mapRotation, Modifier.padding(padding))
                 }
             } else if (records.isEmpty()) {
                 Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
@@ -1124,6 +1128,7 @@ private fun CruiseRecordRow(record: CleanRecord, onClick: () -> Unit) {
 private fun CleanRecordDetail(
     record: CleanRecord,
     loadMap: suspend (beginEpoch: Long) -> ParsedMap,
+    loadPhotos: suspend (CleanRecord) -> List<VacuumRepository.RunPhoto>,
     loadTimeline: suspend (CleanRecord) -> List<CleanTimelineStep>?,
     roomName: (Int) -> String?,
     mapRotation: Int,
@@ -1185,7 +1190,27 @@ private fun CleanRecordDetail(
                 SummaryStatItem(cleanAreaLabel(record.shownAreaMm2), "Cleaning Area")
             }
         }
+        RunPhotosCard(record, loadPhotos)
         CleanTimelineCard(record, loadTimeline, roomName)
+    }
+}
+
+/** The obstacle photos the robot took during a run, saved on the phone so they outlast the robot's copies. */
+@Composable
+private fun RunPhotosCard(record: CleanRecord, loadPhotos: suspend (CleanRecord) -> List<VacuumRepository.RunPhoto>) {
+    var photos by remember(record.beginEpoch) { mutableStateOf<List<VacuumRepository.RunPhoto>?>(null) }
+    LaunchedEffect(record.beginEpoch) {
+        photos = runCatching { loadPhotos(record) }.getOrDefault(emptyList())
+    }
+    val list = photos
+    // A run without obstacle photos gets no card at all, as in the official app.
+    if (list != null && list.isEmpty()) return
+    Surface(Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.surfaceVariant, shape = MaterialTheme.shapes.extraLarge) {
+        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("Obstacle photos", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            if (list == null) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+            else RunPhotoGrid(list)
+        }
     }
 }
 
