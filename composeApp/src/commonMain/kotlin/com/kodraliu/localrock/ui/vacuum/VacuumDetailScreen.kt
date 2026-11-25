@@ -202,6 +202,9 @@ import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.delay
 
 
+/** Max+ (108) is offered in Vacuum-only mode, as the official app does. */
+private const val FAN_MAX_PLUS = 108
+
 private val FAN_OPTIONS = listOf(
     VacuumFanPower.QUIET to "Quiet",
     VacuumFanPower.BALANCED to "Balanced",
@@ -509,6 +512,7 @@ fun VacuumDetailScreen(
                     supportsSmartPlan = supportsSmartPlan,
                     supportsVacuumThenMop = supportsVacuumThenMop,
                     supportsCleanEfficiency = supportsCleanEfficiency,
+                    supportsWaterSlide = supportsWaterSlide,
                     rooms = parsedMap?.rooms ?: emptyList(),
                     roomCleanModes = roomCleanModes,
                     roomModesLoaded = roomModesLoaded,
@@ -1565,6 +1569,7 @@ private fun CleaningModeSheetContent(
     supportsSmartPlan: Boolean,
     supportsVacuumThenMop: Boolean,
     supportsCleanEfficiency: Boolean,
+    supportsWaterSlide: Boolean,
     rooms: List<ParsedMapRoom>,
     roomCleanModes: List<RoomCleanMode>,
     roomModesLoaded: Boolean?,
@@ -1681,12 +1686,17 @@ private fun CleaningModeSheetContent(
                     Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 
                     val suction = @Composable {
-                        ModeOptionSelector("Suction power", FAN_OPTIONS.map { it.second }, FAN_OPTIONS.indexOfFirst { it.first == currentFanPower }, !busy) { onFanPowerSelected(FAN_OPTIONS[it].first) }
+                        val options = if (selectedTab == 2) FAN_OPTIONS + (FAN_MAX_PLUS to "Max+") else FAN_OPTIONS
+                        ModeOptionSelector("Suction power", options.map { it.second }, options.indexOfFirst { it.first == currentFanPower }, !busy) { onFanPowerSelected(options[it].first) }
                     }
                     val water = @Composable {
-                        // Water off is Vacuum mode, so the mopping modes only offer real flow levels.
-                        val options = WATER_OPTIONS.filter { it.first != WaterBoxMode.OFF }
-                        ModeOptionSelector("Water flow", options.map { it.second }, options.indexOfFirst { it.first == WaterBoxMode.normalize(currentWaterMode) }, !busy) { onWaterModeSelected(options[it].first) }
+                        if (supportsWaterSlide) {
+                            WaterFlowSlider(currentWaterMode, enabled = !busy, onSelect = onWaterModeSelected)
+                        } else {
+                            // Water off is Vacuum mode, so the mopping modes only offer real flow levels.
+                            val options = WATER_OPTIONS.filter { it.first != WaterBoxMode.OFF }
+                            ModeOptionSelector("Water flow", options.map { it.second }, options.indexOfFirst { it.first == WaterBoxMode.normalize(currentWaterMode) }, !busy) { onWaterModeSelected(options[it].first) }
+                        }
                     }
                     val route = @Composable {
                         val options = if (selectedTab == 3 && !supportsCleanEfficiency) {

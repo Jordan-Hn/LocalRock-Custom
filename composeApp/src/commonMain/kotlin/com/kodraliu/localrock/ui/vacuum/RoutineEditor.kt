@@ -94,7 +94,9 @@ private fun settingsSummary(task: RoutineTask, slide: Boolean): String = buildLi
     add(task.mode.label)
     if (task.vacuuming) add(SUCTION.firstOrNull { it.first == task.fanPower }?.second ?: "Suction ${task.fanPower}")
     if (task.mopping) {
-        add((waterLevels(slide).firstOrNull { it.first == task.waterMode }?.second ?: "Custom") + " water")
+        val waterName = if (slide && task.waterMode in 221..250) "${waterSlideName(task.waterMode - 220)} (${task.waterMode - 220})"
+        else waterLevels(slide).firstOrNull { it.first == task.waterMode }?.second ?: "Custom"
+        add("$waterName water")
         add(ROUTES.firstOrNull { it.first == task.mopRoute }?.second ?: "Route ${task.mopRoute}")
     }
     if (task.passes > 1) add("×${task.passes}")
@@ -352,7 +354,11 @@ private fun TaskSettingsSheet(
                 SettingRow("Suction") { SUCTION.forEach { (v, l) -> Choice(l, task.fanPower == v) { task = task.copy(fanPower = v) } } }
             }
             if (task.mopping) {
-                SettingRow("Water flow") { water.forEach { (v, l) -> Choice(l, task.waterMode == v) { task = task.copy(waterMode = v) } } }
+                if (supportsWaterSlide) {
+                    WaterFlowSlider(task.waterMode, enabled = true) { task = task.copy(waterMode = it) }
+                } else {
+                    SettingRow("Water flow") { water.forEach { (v, l) -> Choice(l, task.waterMode == v) { task = task.copy(waterMode = v) } } }
+                }
                 SettingRow("Mop route") { ROUTES.forEach { (v, l) -> Choice(l, task.mopRoute == v) { task = task.copy(mopRoute = v) } } }
             }
             SettingRow("Cleaning passes") { listOf(1, 2).forEach { n -> Choice("${n}×", task.passes == n) { task = task.copy(passes = n) } } }
@@ -388,4 +394,42 @@ private fun Choice(label: String, selected: Boolean, onClick: () -> Unit) {
             selectedLabelColor = Color.White,
         ),
     )
+}
+
+/** The official app's names for ranges of the 1-30 water slider (python-roborock _WATER_SLIDE_RANGES). */
+internal fun waterSlideName(position: Int): String = when {
+    position <= 3 -> "Slight"
+    position <= 7 -> "Low"
+    position <= 12 -> "Gentle"
+    position <= 17 -> "Medium"
+    position <= 22 -> "Moderate"
+    position <= 27 -> "High"
+    else -> "Extreme"
+}
+
+/**
+ * Water flow as the official app shows it on water-slider robots: a 1-30 slider, sent as 220 + position.
+ * [code] is the current water_box_mode; [onSelect] fires once the finger lifts, not on every step.
+ */
+@Composable
+internal fun WaterFlowSlider(code: Int?, enabled: Boolean, onSelect: (Int) -> Unit) {
+    val start = code?.takeIf { it in 221..250 }?.minus(220) ?: 15
+    var position by remember(code) { mutableStateOf(start.toFloat()) }
+    val shown = position.toInt().coerceIn(1, 30)
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Water flow", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+            Spacer(Modifier.width(6.dp))
+            Text("${waterSlideName(shown)} · $shown", style = MaterialTheme.typography.bodyMedium, color = AppColors.Brand)
+        }
+        androidx.compose.material3.Slider(
+            value = position,
+            onValueChange = { position = it },
+            onValueChangeFinished = { onSelect(220 + position.toInt().coerceIn(1, 30)) },
+            valueRange = 1f..30f,
+            steps = 28,
+            enabled = enabled,
+            colors = androidx.compose.material3.SliderDefaults.colors(thumbColor = AppColors.Brand, activeTrackColor = AppColors.Brand),
+        )
+    }
 }

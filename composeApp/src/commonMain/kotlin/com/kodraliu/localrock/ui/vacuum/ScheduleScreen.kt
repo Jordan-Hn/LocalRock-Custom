@@ -186,6 +186,8 @@ fun ScheduleScreen(
         ScheduleDialog(
             initial = current,
             routines = routines,
+            routinesState = routinesState,
+            onRetryRoutines = { viewModel.loadRoutines() },
             onDismiss = { draft = null },
             onSave = { saved ->
                 draft = null
@@ -274,6 +276,8 @@ private fun ScheduleRow(
 private fun ScheduleDialog(
     initial: ScheduleDraft,
     routines: List<Scene>,
+    routinesState: RoutinesState,
+    onRetryRoutines: () -> Unit,
     onDismiss: () -> Unit,
     onSave: (ScheduleDraft) -> Unit,
 ) {
@@ -324,12 +328,25 @@ private fun ScheduleDialog(
                 if (initial.editing == null) {
                     TaskOption("Full clean (robot timer)", task == ScheduleTask.FullClean) { task = ScheduleTask.FullClean }
                 }
-                if (routines.isEmpty()) {
-                    Text(
-                        "Make a routine in the Routine tab to schedule rooms, modes and several steps.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                when (routinesState) {
+                    // A failed or slow load isn't the same as having no routines, so say which it is.
+                    is RoutinesState.Failed -> Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "Couldn't load your routines: ${routinesState.reason}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(onClick = onRetryRoutines) { Text("Retry") }
+                    }
+                    RoutinesState.Loading -> Text("Loading your routines…", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    is RoutinesState.Loaded -> if (routines.isEmpty()) {
+                        Text(
+                            "Make a routine in the Routine tab to schedule rooms, modes and several steps.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
         },
