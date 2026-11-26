@@ -1329,8 +1329,15 @@ class VacuumRepository(
     }
 
     /** The map the robot drew for the run that began at [beginEpoch], for the history page. */
-    suspend fun fetchCleanRecordMap(beginEpoch: Long): ParsedMap = mapFetchMutex.withLock {
-        readMap(session.fetchCleanRecordMap(createSecurityData(rriotKeyProvider()), beginEpoch).data)
+    suspend fun fetchCleanRecordMap(beginEpoch: Long): ParsedMap {
+        // Saved on the phone once fetched: the map of a past run never changes, and away from home it
+        // is the only copy there is.
+        val key = "$duid/runs/$beginEpoch.bin"
+        offlineCache.readBytes(key)?.let { saved -> runCatching { readMap(saved) }.getOrNull()?.let { return it } }
+        return mapFetchMutex.withLock {
+            val data = session.fetchCleanRecordMap(createSecurityData(rriotKeyProvider()), beginEpoch).data
+            readMap(data).also { if (!demo) offlineCache.writeBytes(key, data) }
+        }
     }
 
     private fun readMap(data: ByteArray): ParsedMap =
@@ -1437,6 +1444,9 @@ class VacuumRepository(
                 .filter { !photoStore.hasRun(it.beginEpoch) }
                 .forEach { runCatching { loadRunPhotos(it, background = true) {} } }
             runCatching { photoStore.prune(KEPT_PHOTO_RUNS) }
+            // Run maps are kept for the same newest runs as their photos.
+            val keep = records.sortedByDescending { it.beginEpoch }.take(KEPT_PHOTO_RUNS).map { "${it.beginEpoch}.bin" }.toSet()
+            runCatching { offlineCache.prune("$duid/runs", keep) }
         }
     }
 

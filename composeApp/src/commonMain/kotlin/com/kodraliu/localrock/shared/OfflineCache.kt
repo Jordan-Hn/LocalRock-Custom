@@ -36,6 +36,15 @@ class OfflineCache(dirPath: String? = appDataDir()) {
         }
     }
 
+    /** Deletes the files in folder [key] whose names aren't in [keep]. */
+    fun prune(key: String, keep: Set<String>) {
+        val folder = path(key) ?: return
+        runCatching {
+            if (!fs.exists(folder)) return
+            fs.list(folder).filter { it.name !in keep }.forEach { runCatching { fs.delete(it) } }
+        }
+    }
+
     /** Keys are made by the app ("home.json", "<duid>/map.bin"); each part is kept to safe file-name characters. */
     private fun path(key: String): Path? {
         val d = dir ?: return null
