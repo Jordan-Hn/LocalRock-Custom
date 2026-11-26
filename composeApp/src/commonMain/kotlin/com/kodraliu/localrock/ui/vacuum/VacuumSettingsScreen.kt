@@ -921,7 +921,7 @@ private fun HistoryScreen(
     records: List<CleanRecord>,
     summary: CleanSummary?,
     loadMap: suspend (beginEpoch: Long) -> ParsedMap,
-    loadPhotos: suspend (CleanRecord) -> List<VacuumRepository.RunPhoto>,
+    loadPhotos: suspend (CleanRecord, (List<VacuumRepository.RunPhoto>) -> Unit) -> List<VacuumRepository.RunPhoto>,
     loadThumbnails: suspend (taskId: Long, x: Int, y: Int) -> List<PatrolThumbnail>,
     mapRotation: Int,
     loadTimeline: suspend (CleanRecord) -> List<CleanTimelineStep>?,
@@ -1128,7 +1128,7 @@ private fun CruiseRecordRow(record: CleanRecord, onClick: () -> Unit) {
 private fun CleanRecordDetail(
     record: CleanRecord,
     loadMap: suspend (beginEpoch: Long) -> ParsedMap,
-    loadPhotos: suspend (CleanRecord) -> List<VacuumRepository.RunPhoto>,
+    loadPhotos: suspend (CleanRecord, (List<VacuumRepository.RunPhoto>) -> Unit) -> List<VacuumRepository.RunPhoto>,
     loadTimeline: suspend (CleanRecord) -> List<CleanTimelineStep>?,
     roomName: (Int) -> String?,
     mapRotation: Int,
@@ -1197,10 +1197,12 @@ private fun CleanRecordDetail(
 
 /** The obstacle photos the robot took during a run, saved on the phone so they outlast the robot's copies. */
 @Composable
-private fun RunPhotosCard(record: CleanRecord, loadPhotos: suspend (CleanRecord) -> List<VacuumRepository.RunPhoto>) {
+private fun RunPhotosCard(record: CleanRecord, loadPhotos: suspend (CleanRecord, (List<VacuumRepository.RunPhoto>) -> Unit) -> List<VacuumRepository.RunPhoto>) {
     var photos by remember(record.beginEpoch) { mutableStateOf<List<VacuumRepository.RunPhoto>?>(null) }
     LaunchedEffect(record.beginEpoch) {
-        photos = runCatching { loadPhotos(record) }.getOrDefault(emptyList())
+        // Each update carries what is in so far: saved photos straight away, the robot's as they arrive.
+        val final = runCatching { loadPhotos(record) { photos = it } }.getOrNull()
+        photos = final ?: photos.orEmpty().map { VacuumRepository.RunPhoto(it.photoId, it.type, it.photo) }
     }
     val list = photos
     // A run without obstacle photos gets no card at all, as in the official app.

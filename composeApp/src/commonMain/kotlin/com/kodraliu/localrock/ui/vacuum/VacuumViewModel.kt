@@ -68,6 +68,9 @@ class VacuumViewModel(
     private val container: AppContainer,
 ) : ViewModel() {
 
+    /** The server can't be reached (away from home): the screen shows what was saved on the phone. */
+    val awayFromHome = container.deviceRepository.offline
+
     private val device = requireNotNull(container.deviceRepository.devices.value.find { it.duid == duid }) {
         "Device $duid not found — navigate to DeviceList first to load devices"
     }

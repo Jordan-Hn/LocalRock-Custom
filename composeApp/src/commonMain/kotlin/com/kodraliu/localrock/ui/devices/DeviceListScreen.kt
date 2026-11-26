@@ -92,6 +92,7 @@ fun DeviceListScreen(
     val reachability by viewModel.reachability.collectAsState()
     val refreshing by viewModel.refreshing.collectAsState()
     val error by viewModel.error.collectAsState()
+    val awayFromHome by viewModel.awayFromHome.collectAsState()
     val cards by viewModel.cards.collectAsState()
     val message by viewModel.message.collectAsState()
     var showLogoutDialog by remember { mutableStateOf(false) }
@@ -181,6 +182,7 @@ fun DeviceListScreen(
                         error?.let { msg ->
                             item { ErrorCard(message = msg, onRetry = viewModel::refresh) }
                         }
+                        if (awayFromHome) item { AwayFromHomeCard(onRetry = viewModel::refresh) }
                         items(devices, key = { it.duid }) { device ->
                             val needsPairing = device.duid in unpaired && vacuumPairingSupported
                             HomeDeviceCard(
@@ -280,6 +282,30 @@ private fun ErrorCard(message: String, onRetry: () -> Unit) {
                 message,
                 modifier = Modifier.weight(1f),
                 color = MaterialTheme.colorScheme.onErrorContainer,
+                style = MaterialTheme.typography.bodySmall,
+            )
+            TextButton(onClick = onRetry) { Text("Retry") }
+        }
+    }
+}
+
+/** Shown while the server can't be reached: the list, status and history are the phone's saved copy. */
+@Composable
+private fun AwayFromHomeCard(onRetry: () -> Unit) {
+    Surface(
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        shape = MaterialTheme.shapes.large,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            modifier = Modifier.padding(start = 14.dp, top = 8.dp, end = 8.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                "Away from home: showing what was saved on this phone. Controls work again on your home network.",
+                modifier = Modifier.weight(1f),
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
                 style = MaterialTheme.typography.bodySmall,
             )
             TextButton(onClick = onRetry) { Text("Retry") }

@@ -107,7 +107,9 @@ class CameraLiveSession(private val session: VacuumSession) {
         connectJob = scope.launch {
             try {
                 val current = runCatching { firstInt(session.getCameraStatus().result) }.getOrNull() ?: BASE_CAMERA_STATUS
-                val base = current and CAMERA_AUTH_BIT.inv()
+                // A robot that was confirmed before carries bit 13; it refuses a new request (bit 12)
+                // alongside it with "Invalid parameters", so both robot-owned bits are cleared first.
+                val base = current and (CAMERA_AUTH_BIT or CAMERA_ACTIVATED_BIT).inv()
                 for (flags in ACTIVATION_FLAGS) {
                     runCatching { session.setCameraStatus(base or flags) }
                     delay(800)
@@ -351,6 +353,9 @@ class CameraLiveSession(private val session: VacuumSession) {
 
         /** Set by the robot once activation is confirmed with its Power button; writes containing it are refused. */
         const val CAMERA_AUTH_BIT = 0x4
+
+        /** Set by the robot with [CAMERA_AUTH_BIT] once activated (4513 became 8613 on the a226). */
+        const val CAMERA_ACTIVATED_BIT = 0x2000
 
         /** How long to keep retrying the preview while the robot waits for its Power button. */
         const val BUTTON_WAIT_MS = 90_000L

@@ -70,6 +70,7 @@ fun washFrequencyLabel(settings: SmartWashSettings?): String = when (settings?.m
     else -> "Unknown (${settings.mode})"
 }
 
+@kotlinx.serialization.Serializable
 data class CleanSummary(
     val totalTimeSec: Long,
     val totalAreaMm2: Long,

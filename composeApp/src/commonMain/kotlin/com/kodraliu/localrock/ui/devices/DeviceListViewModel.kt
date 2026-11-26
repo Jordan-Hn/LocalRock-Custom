@@ -23,6 +23,7 @@ class DeviceListViewModel(
 
     val devices = container.deviceRepository.devices
     val productsByDuid = container.deviceRepository.productsByDuid
+    val awayFromHome = container.deviceRepository.offline
     val reachability = container.deviceRepository.reachability
     val unpaired = container.deviceRepository.unpaired
 

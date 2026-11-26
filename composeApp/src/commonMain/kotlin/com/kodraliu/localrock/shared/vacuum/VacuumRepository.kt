@@ -31,6 +31,9 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.sample
+import kotlinx.serialization.builtins.ListSerializer
+import com.kodraliu.localrock.shared.http.ProdJson
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.Json
@@ -483,6 +486,10 @@ class VacuumRepository(
             parseCleanRecord(result, id)?.let { records += it }
         }
         _cleanHistory.value = records
+        if (records.isNotEmpty()) {
+            offlineCache.writeText("$duid/history.json", ProdJson.encodeToString(ListSerializer(CleanRecord.serializer()), records))
+        }
+        _cleanSummary.value?.let { offlineCache.writeText("$duid/summary.json", ProdJson.encodeToString(CleanSummary.serializer(), it)) }
         prefetchRunPhotos(records)
     }
 
@@ -1348,42 +1355,87 @@ class VacuumRepository(
             }
     }
 
-    /** One obstacle photo of a run: its type, and the photo when it could be had (from the phone or the robot). */
-    class RunPhoto(val photoId: String, val type: Int?, val photo: ObstaclePhotoData?)
+    /**
+     * One obstacle photo of a run: its type, the photo once it is had (from the phone or the robot),
+     * and whether it is still being fetched.
+     */
+    class RunPhoto(val photoId: String, val type: Int?, val photo: ObstaclePhotoData?, val pending: Boolean = false)
+
+    /** History screens looking at photos right now; the background saver waits while there are any. */
+    private val photoViewers = MutableStateFlow(0)
+
+    /** Photos the robot didn't send this session (it had replaced them); not asked for again until the app restarts. */
+    private val missingPhotos = mutableSetOf<String>()
 
     /**
-     * The obstacle photos of the run that began at [record]'s start. The run's map names them; each
-     * comes from the phone if saved, else from the robot, and the set is recorded so it stays
-     * available once the robot has replaced them. When the map can't be had any more, what was saved
-     * is shown.
+     * The obstacle photos of the run that began at [record]'s start, reported through [onUpdate] as
+     * they come in: photos saved on the phone at once, then the rest from the robot one by one. The
+     * set is recorded so it stays available once the robot has replaced them.
      */
-    suspend fun fetchRunPhotos(record: CleanRecord): List<RunPhoto> {
+    suspend fun fetchRunPhotos(record: CleanRecord, onUpdate: (List<RunPhoto>) -> Unit): List<RunPhoto> {
+        photoViewers.update { it + 1 }
+        try {
+            return loadRunPhotos(record, background = false, onUpdate)
+        } finally {
+            photoViewers.update { it - 1 }
+        }
+    }
+
+    private suspend fun loadRunPhotos(record: CleanRecord, background: Boolean, onUpdate: (List<RunPhoto>) -> Unit): List<RunPhoto> {
+        val saved = photoStore.runPhotos(record.beginEpoch)
+        if (saved != null) onUpdate(saved.map { RunPhoto(it.photoId, it.type, photoStore.get(it.photoId), pending = true) })
+
+        if (background) photoViewers.first { it == 0 }
         val fromMap = runCatching { fetchCleanRecordMap(record.beginEpoch) }.getOrNull()
             ?.obstacles?.filter { it.photoId != null }?.distinctBy { it.photoId }
             ?.map { ObstaclePhotoStore.Entry(it.photoId!!, it.type) }
-        val entries = fromMap ?: photoStore.runPhotos(record.beginEpoch) ?: return emptyList()
-        val photos = entries.map { e -> RunPhoto(e.photoId, e.type, runCatching { fetchObstaclePhoto(e.photoId) }.getOrNull()) }
-        // Only what was actually saved is recorded, so a later visit can still try the rest.
-        val saved = photos.filter { it.photo != null }.map { ObstaclePhotoStore.Entry(it.photoId, it.type) }
-        if (saved.isNotEmpty() || fromMap != null) {
-            val before = photoStore.runPhotos(record.beginEpoch).orEmpty()
-            photoStore.saveRun(record.beginEpoch, (before + saved).distinctBy { it.photoId })
+        val entries = fromMap ?: saved ?: run { onUpdate(emptyList()); return emptyList() }
+
+        val current = entries.map { e ->
+            val have = obstaclePhotos[e.photoId] ?: photoStore.get(e.photoId)
+            RunPhoto(e.photoId, e.type, have, pending = have == null && e.photoId !in missingPhotos)
+        }.toMutableList()
+        onUpdate(current.toList())
+        for (i in current.indices) {
+            val p = current[i]
+            if (!p.pending) continue
+            if (background) photoViewers.first { it == 0 }
+            current[i] = RunPhoto(p.photoId, p.type, loadPhotoOrNull(p.photoId), pending = false)
+            onUpdate(current.toList())
         }
-        return photos
+
+        // Only what was actually saved is recorded, so a later visit can still try the rest.
+        val kept = current.filter { it.photo != null }.map { ObstaclePhotoStore.Entry(it.photoId, it.type) }
+        if (kept.isNotEmpty() || fromMap != null) {
+            photoStore.saveRun(record.beginEpoch, (saved.orEmpty() + kept).distinctBy { it.photoId })
+        }
+        return current
+    }
+
+    /** A history photo from memory, the phone or the robot; null, and not asked again, when the robot doesn't send it. */
+    private suspend fun loadPhotoOrNull(photoId: String): ObstaclePhotoData? = photoMutex.withLock {
+        obstaclePhotos[photoId]?.let { return@withLock it }
+        photoStore.get(photoId)?.let { obstaclePhotos[photoId] = it; return@withLock it }
+        if (photoId in missingPhotos) return@withLock null
+        runCatching { session.fetchPhoto(createSecurityData(rriotKeyProvider()), photoId, HISTORY_PHOTO_TIMEOUT_MS) }
+            .onSuccess { obstaclePhotos[photoId] = it; photoStore.put(photoId, it) }
+            .onFailure { missingPhotos += photoId }
+            .getOrNull()
     }
 
     private var photoPrefetch: kotlinx.coroutines.Job? = null
 
     /**
      * Saves the photos of the newest runs that aren't saved yet, while the robot still has them, then
-     * drops the photos of runs past [KEPT_PHOTO_RUNS]. Runs in the background after the history loads.
+     * drops the photos of runs past [KEPT_PHOTO_RUNS]. Runs in the background after the history loads,
+     * and steps aside whenever a history screen is showing photos.
      */
     private fun prefetchRunPhotos(records: List<CleanRecord>) {
         if (photoPrefetch?.isActive == true) return
         photoPrefetch = scope.launch {
             records.sortedByDescending { it.beginEpoch }.take(PREFETCH_PHOTO_RUNS)
                 .filter { !photoStore.hasRun(it.beginEpoch) }
-                .forEach { runCatching { fetchRunPhotos(it) } }
+                .forEach { runCatching { loadRunPhotos(it, background = true) {} } }
             runCatching { photoStore.prune(KEPT_PHOTO_RUNS) }
         }
     }
@@ -1407,6 +1459,7 @@ class VacuumRepository(
         try {
             val resp = session.fetchMap(sd, timeoutMs = 60_000L)
             _mapBytes.value = resp.data
+            saveMapForOffline(resp.data)
             val sizeKb = resp.data.size / 1024
             // Try B01 first (Q-series / newer firmware), then legacy "rr"-magic (S-series).
             val b01 = runCatching { parseB01Map(resp.data) }
@@ -1436,6 +1489,68 @@ class VacuumRepository(
         }
     }
 
+    // ---- offline copy -------------------------------------------------------------------------------
+
+    private val offlineCache by lazy { com.kodraliu.localrock.shared.OfflineCache() }
+    private var mapSavedAt: kotlin.time.TimeMark? = null
+
+    /** The live map, saved at most once a minute: enough to show the home away from it, without writing on every poll. */
+    private fun saveMapForOffline(bytes: ByteArray) {
+        if (demo || bytes.isEmpty()) return
+        val last = mapSavedAt
+        if (last != null && last.elapsedNow().inWholeSeconds < 60) return
+        mapSavedAt = kotlin.time.TimeSource.Monotonic.markNow()
+        offlineCache.writeBytes("$duid/map.bin", bytes)
+    }
+
+    /**
+     * Fills the screens from the phone's copy until live data arrives: the last status, map and
+     * history. Anything the robot then sends replaces it.
+     */
+    private fun restoreFromOfflineCache() {
+        if (demo) return
+        offlineCache.readText("$duid/status.json")
+            ?.let { runCatching { ProdJson.decodeFromString(VacuumStatus.serializer(), it) }.getOrNull() }
+            ?.let { saved -> _status.update { if (it == VacuumStatus()) saved else it } }
+        if (_parsedMap.value == null) {
+            offlineCache.readBytes("$duid/map.bin")?.let { bytes ->
+                runCatching { readMap(bytes) }.getOrNull()?.let { map ->
+                    _mapBytes.value = bytes
+                    _parsedMap.value = map
+                    if (map.rooms.isNotEmpty()) _rooms.value = map.rooms
+                    applyRoomNames()
+                }
+            }
+        }
+        if (_cleanHistory.value.isEmpty()) {
+            offlineCache.readText("$duid/history.json")
+                ?.let { runCatching { ProdJson.decodeFromString(ListSerializer(CleanRecord.serializer()), it) }.getOrNull() }
+                ?.let { _cleanHistory.value = it }
+        }
+        if (_cleanSummary.value == null) {
+            offlineCache.readText("$duid/summary.json")
+                ?.let { runCatching { ProdJson.decodeFromString(CleanSummary.serializer(), it) }.getOrNull() }
+                ?.let { _cleanSummary.value = it }
+        }
+    }
+
+    /** Saves the status whenever it settles, at most every 30 s. */
+    @OptIn(kotlinx.coroutines.FlowPreview::class)
+    private fun saveStatusForOffline() {
+        if (demo) return
+        scope.launch {
+            _status.sample(30_000).collect { status ->
+                if (status != VacuumStatus()) offlineCache.writeText("$duid/status.json", ProdJson.encodeToString(VacuumStatus.serializer(), status))
+            }
+        }
+    }
+
+    // Last in the class body, after every property it touches is initialised.
+    init {
+        runCatching { restoreFromOfflineCache() }
+        saveStatusForOffline()
+    }
+
     private companion object {
         val HEX = charArrayOf('0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f')
         val ConsumableJson = Json { ignoreUnknownKeys = true; explicitNulls = false }
@@ -1451,6 +1566,8 @@ class VacuumRepository(
         const val KEPT_PHOTO_RUNS = 20
         /** Newest runs whose photos are saved in the background after the history loads. */
         const val PREFETCH_PHOTO_RUNS = 5
+        /** A photo the robot still has arrives within a couple of seconds; one it replaced never does. */
+        const val HISTORY_PHOTO_TIMEOUT_MS = 6_000L
         const val MAX_TIMELINE_PAGES = 20
 
         const val READBACK_ATTEMPTS = 4

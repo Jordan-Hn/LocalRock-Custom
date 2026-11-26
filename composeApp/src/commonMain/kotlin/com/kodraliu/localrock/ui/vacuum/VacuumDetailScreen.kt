@@ -270,8 +270,13 @@ fun VacuumDetailScreen(
     // A robot carried to its dock keeps its old map position until it re-localizes, so draw it at the charger.
     // While the robot does not answer, its last map (with where it was last seen) stands in.
     val parsedMap = remember(liveMap, status.state) { liveMap?.withRobotOnDock(isDocked(status.state)) } ?: lastKnownMap
-    val offlineLines = remember(lastKnown) {
-        lastKnown?.let { lastKnownLines(it, Instant.fromEpochSeconds(currentEpochSeconds())) } ?: emptyList()
+    val awayFromHome by viewModel.awayFromHome.collectAsState()
+    val offlineLines = remember(lastKnown, awayFromHome) {
+        if (awayFromHome) listOf(
+            "Away from home",
+            "Showing what was saved on this phone. Controls work again on your home network.",
+        )
+        else lastKnown?.let { lastKnownLines(it, Instant.fromEpochSeconds(currentEpochSeconds())) } ?: emptyList()
     }
     val floorMaps by viewModel.repository.floorMaps.collectAsState()
     val currentFloorFlag by viewModel.repository.currentFloorFlag.collectAsState()

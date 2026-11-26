@@ -1,5 +1,6 @@
 package com.kodraliu.localrock.shared.device
 
+import com.kodraliu.localrock.shared.http.ProdJson
 import com.kodraliu.localrock.shared.auth.AuthRepository
 import com.kodraliu.localrock.shared.demo.DemoData
 import com.kodraliu.localrock.shared.model.Device
@@ -37,6 +38,22 @@ class DeviceRepository(
 
     private val _home = MutableStateFlow<Home?>(null)
     val home: StateFlow<Home?> = _home.asStateFlow()
+
+    private val cache = com.kodraliu.localrock.shared.OfflineCache()
+
+    /**
+     * True while the server can't be reached and the screens show what was saved on the phone
+     * (away from home). Commands fail until it is back.
+     */
+    private val _offline = MutableStateFlow(false)
+    val offline: StateFlow<Boolean> = _offline.asStateFlow()
+
+    private fun applyHome(home: Home) {
+        _home.value = home
+        _devicesFlow.value = home.devices.sortedForList()
+        val productsByDeviceId = home.products.associateBy { it.id }
+        _products.value = home.devices.mapNotNull { d -> productsByDeviceId[d.productId]?.let { d.duid to it } }.toMap()
+    }
 
     val devices: StateFlow<List<Device>> get() = _devicesFlow
 
@@ -99,6 +116,21 @@ class DeviceRepository(
             _products.value = home.devices.associate { it.duid to productsByDeviceId[it.productId]!! }
             return
         }
+        try {
+            refreshFromServer()
+            _offline.value = false
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            // Away from home the server's name doesn't resolve: show the saved list instead of an error.
+            val saved = cache.readText(HOME_CACHE)?.let { runCatching { ProdJson.decodeFromString(Home.serializer(), it) }.getOrNull() }
+                ?: throw e
+            if (_home.value == null) applyHome(saved)
+            _offline.value = true
+        }
+    }
+
+    private suspend fun refreshFromServer() {
         val token = authRepository.token() ?: error("Not logged in")
         // NOTE: do NOT call /nc/prepare here. It's an onboarding-only ("network config prepare")
         // endpoint; calling it on every refresh made local_roborock_server fabricate a phantom
@@ -107,10 +139,8 @@ class DeviceRepository(
         val detail = deviceApi.getHomeDetail(token)
         val homeId = detail.resolvedHomeId ?: error("Server did not return a home id")
         val home = deviceApi.getHome(homeId)
-        _home.value = home
-        _devicesFlow.value = home.devices.sortedForList()
-        val productsByDeviceId = home.products.associateBy { it.id }
-        _products.value = home.devices.associate { it.duid to productsByDeviceId[it.productId]!! }
+        applyHome(home)
+        cache.writeText(HOME_CACHE, ProdJson.encodeToString(Home.serializer(), home))
         neverHeard.refresh(home.devices)
     }
 
@@ -129,7 +159,15 @@ class DeviceRepository(
     /** Routines saved for [duid] (made in the official app; local_roborock_server keeps them). */
     suspend fun scenes(duid: String): List<Scene> {
         if (isDemo()) return emptyList()
-        return deviceApi.getScenes(duid)
+        val key = "$duid/scenes.json"
+        val serializer = kotlinx.serialization.builtins.ListSerializer(Scene.serializer())
+        return try {
+            deviceApi.getScenes(duid).also { cache.writeText(key, ProdJson.encodeToString(serializer, it)) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            cache.readText(key)?.let { runCatching { ProdJson.decodeFromString(serializer, it) }.getOrNull() } ?: throw e
+        }
     }
 
     suspend fun createScene(duid: String, name: String, param: kotlinx.serialization.json.JsonObject): Scene {
@@ -160,7 +198,17 @@ class DeviceRepository(
     /** What the server last heard from [duid], or null in demo mode or when it has heard nothing. */
     suspend fun lastKnown(duid: String, includeMap: Boolean = true): LastKnown? {
         if (isDemo()) return null
-        return deviceApi.lastKnown(duid, includeMap).takeIf { it.known }
+        // The list cards' copy (no map) is saved, so the cards still show the robot's last state away from home.
+        val key = "$duid/last-known.json"
+        return try {
+            deviceApi.lastKnown(duid, includeMap).takeIf { it.known }
+                ?.also { if (!includeMap) cache.writeText(key, ProdJson.encodeToString(LastKnown.serializer(), it)) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            if (includeMap) throw e
+            cache.readText(key)?.let { runCatching { ProdJson.decodeFromString(LastKnown.serializer(), it) }.getOrNull() } ?: throw e
+        }
     }
 
     suspend fun startFirmwareUpdate(duid: String): FirmwareStartResult {
@@ -174,5 +222,9 @@ class DeviceRepository(
             return FirmwareUpdateInfo(currentVersion = fv, version = fv, updatable = false)
         }
         return deviceApi.checkFirmwareUpdate(duid)
+    }
+
+    private companion object {
+        const val HOME_CACHE = "home.json"
     }
 }

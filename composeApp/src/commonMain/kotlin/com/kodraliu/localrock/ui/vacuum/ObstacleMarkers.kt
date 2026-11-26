@@ -10,6 +10,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Share
+import com.kodraliu.localrock.ui.rememberPhotoExporter
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.ui.graphics.graphicsLayer
@@ -27,6 +30,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
@@ -117,9 +121,10 @@ internal fun ObstacleSheetContent(obstacle: MapObstacle, loadPhoto: suspend (Str
     var photo by remember(obstacle) { mutableStateOf<Pair<ImageBitmap, PhotoBox?>?>(null) }
     var failure by remember(obstacle) { mutableStateOf<String?>(null) }
     var fullScreen by remember(obstacle) { mutableStateOf(false) }
+    var photoBytes by remember(obstacle) { mutableStateOf<ByteArray?>(null) }
     LaunchedEffect(obstacle) {
         val id = obstacle.photoId ?: return@LaunchedEffect
-        runCatching { loadPhoto(id).let { it.image.decodeToImageBitmap() to it.box } }
+        runCatching { loadPhoto(id).let { photoBytes = it.image; it.image.decodeToImageBitmap() to it.box } }
             .onSuccess { photo = it }
             .onFailure { failure = it.message ?: "The robot didn't send it" }
     }
@@ -167,7 +172,7 @@ internal fun ObstacleSheetContent(obstacle: MapObstacle, loadPhoto: suspend (Str
                         },
                     contentScale = ContentScale.Fit,
                 )
-                if (fullScreen) FullScreenPhoto(bitmap) { fullScreen = false }
+                if (fullScreen) FullScreenPhoto(bitmap, photoBytes, "obstacle-${obstacle.photoId}") { fullScreen = false }
             }
             failure != null -> Text(
                 "Couldn't load the photo: $failure",
@@ -183,7 +188,7 @@ internal fun ObstacleSheetContent(obstacle: MapObstacle, loadPhoto: suspend (Str
 
 /** The photo on its own, edge to edge with no box over it: pinch to zoom, double tap to reset, tap or X to close. */
 @Composable
-internal fun FullScreenPhoto(bitmap: ImageBitmap, onClose: () -> Unit) {
+internal fun FullScreenPhoto(bitmap: ImageBitmap, bytes: ByteArray?, name: String, onClose: () -> Unit) {
     Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         var scale by remember { mutableStateOf(1f) }
         var offset by remember { mutableStateOf(Offset.Zero) }
@@ -210,8 +215,23 @@ internal fun FullScreenPhoto(bitmap: ImageBitmap, onClose: () -> Unit) {
                 },
                 contentScale = ContentScale.Fit,
             )
-            IconButton(onClick = onClose, modifier = Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(8.dp)) {
-                Icon(Icons.Filled.Close, contentDescription = "Close", tint = Color.White)
+            Row(Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(8.dp)) {
+                if (bytes != null) {
+                    val exporter = rememberPhotoExporter()
+                    val messages = com.kodraliu.localrock.ui.LocalAppContainer.current.messages
+                    IconButton(onClick = {
+                        if (exporter.save(bytes, name)) messages.success("Saved to Pictures/LocalRock")
+                        else messages.error("Couldn't save the photo")
+                    }) {
+                        Icon(Icons.Filled.Download, contentDescription = "Save to gallery", tint = Color.White)
+                    }
+                    IconButton(onClick = { if (!exporter.share(bytes, name)) messages.error("Couldn't share the photo") }) {
+                        Icon(Icons.Filled.Share, contentDescription = "Share", tint = Color.White)
+                    }
+                }
+                IconButton(onClick = onClose) {
+                    Icon(Icons.Filled.Close, contentDescription = "Close", tint = Color.White)
+                }
             }
         }
     }
@@ -243,7 +263,7 @@ private fun DrawScope.drawBoxCorners(box: PhotoBox, imageWidth: Int, imageHeight
  */
 @Composable
 internal fun RunPhotoGrid(photos: List<com.kodraliu.localrock.shared.vacuum.VacuumRepository.RunPhoto>) {
-    var open by remember { mutableStateOf<ImageBitmap?>(null) }
+    var open by remember { mutableStateOf<Pair<ImageBitmap, com.kodraliu.localrock.shared.vacuum.VacuumRepository.RunPhoto>?>(null) }
     val decoded = remember(photos) {
         photos.map { p -> p to p.photo?.let { runCatching { it.image.decodeToImageBitmap() }.getOrNull() } }
     }
@@ -255,11 +275,13 @@ internal fun RunPhotoGrid(photos: List<com.kodraliu.localrock.shared.vacuum.Vacu
                         Box(
                             Modifier.fillMaxWidth().aspectRatio(4f / 3f).clip(MaterialTheme.shapes.medium)
                                 .background(MaterialTheme.colorScheme.surfaceContainerHighest)
-                                .then(if (bitmap != null) Modifier.clickable { open = bitmap } else Modifier),
+                                .then(if (bitmap != null) Modifier.clickable { open = bitmap to p } else Modifier),
                             contentAlignment = Alignment.Center,
                         ) {
                             if (bitmap != null) {
                                 Image(bitmap, contentDescription = obstacleType(p.type).name, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                            } else if (p.pending) {
+                                CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
                             } else {
                                 Text("Not kept", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
@@ -272,5 +294,5 @@ internal fun RunPhotoGrid(photos: List<com.kodraliu.localrock.shared.vacuum.Vacu
             }
         }
     }
-    open?.let { FullScreenPhoto(it) { open = null } }
+    open?.let { (bitmap, p) -> FullScreenPhoto(bitmap, p.photo?.image, "obstacle-${p.photoId}") { open = null } }
 }

@@ -112,10 +112,13 @@ fun CameraLiveViewScreen(
     var tab by remember { mutableStateOf(initialTab) }
     var pin by remember { mutableStateOf(container.appSettings.cameraPin(duid) ?: "") }
 
+    // Manual control (app_rc_start) pauses whatever the robot is doing, so it is taken only when an
+    // arrow is first held. Just watching leaves a clean running.
+    val rcStarted = remember { mutableStateOf(false) }
     DisposableEffect(Unit) {
         onDispose {
             liveSession.dispose()
-            scope.launch { runCatching { repository.stopRemoteControl() } }
+            if (rcStarted.value) scope.launch { runCatching { repository.stopRemoteControl() } }
         }
     }
     LaunchedEffect(Unit) {
@@ -192,9 +195,15 @@ fun CameraLiveViewScreen(
             ) {
                 when (tab) {
                     RemoteTab.DRIVE -> DrivePad(
-                        onStart = { runCatching { repository.startRemoteControl() } },
-                        onMove = { v, o -> runCatching { repository.moveRemote(v, o, 700) } },
-                        onEnd = { runCatching { repository.stopRemoteControl() } },
+                        onMove = { v, o ->
+                            if (!rcStarted.value) {
+                                rcStarted.value = true
+                                runCatching { repository.startRemoteControl() }
+                            }
+                            runCatching { repository.moveRemote(v, o, 700) }
+                        },
+                        // Each move lasts 700 ms, so the robot stops by itself once the arrow is let go.
+                        onEnd = {},
                     )
                     RemoteTab.PET -> PetSearchPanel(
                         stateLabel = status.state?.let { com.kodraliu.localrock.shared.vacuum.VacuumStateCodes.describe(it) } ?: "—",
@@ -322,11 +331,9 @@ private fun VideoArea(
  */
 @Composable
 private fun DrivePad(
-    onStart: suspend () -> Unit,
     onMove: suspend (velocity: Double, omega: Double) -> Unit,
     onEnd: suspend () -> Unit,
 ) {
-    LaunchedEffect(Unit) { onStart() }
     Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text("Press and hold to drive", color = Color.White.copy(alpha = 0.7f), style = MaterialTheme.typography.bodySmall)
         HoldButton(Icons.Default.KeyboardArrowUp, "Forward", onHold = { onMove(0.3, 0.0) }, onRelease = onEnd)

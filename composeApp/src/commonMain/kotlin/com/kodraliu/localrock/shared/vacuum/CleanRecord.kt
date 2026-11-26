@@ -1,5 +1,6 @@
 package com.kodraliu.localrock.shared.vacuum
 
+@kotlinx.serialization.Serializable
 data class CleanRecord(
     val beginEpoch: Long,
     val endEpoch: Long,

@@ -5,6 +5,8 @@
     <uses-permission android:name="android.permission.INTERNET"/>
     <!-- Talking through the robot during a live view. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+    <!-- Saving a photo to the gallery; Android 10 and later need no permission for that. -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28"/>
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS"/>
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE"/>
@@ -47,6 +49,15 @@
             android:name=".RobotMonitorService"
             android:exported="false"
             android:foregroundServiceType="connectedDevice" />
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.photos"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/shared_photos" />
+        </provider>
     </application>
 
 </manifest>
